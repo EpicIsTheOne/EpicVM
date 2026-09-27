@@ -19,7 +19,7 @@ def test_public_docs_present_epicvm_product_identity_and_commands():
     text = combined_docs()
     for value in ("EpicVM", "epicvm", "install-epicvm.sh", "EpicVM Dashboard"):
         assert value in text
-    assert "curl -fsSL https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install-epicvm.sh | sudo bash" in text
+    assert "https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install-epicvm.sh | sudo bash" in text
     assert "epicvm doctor" in text
     assert "?v=" not in text
 

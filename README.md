@@ -17,9 +17,7 @@ Thank you to [Blobby-Boi](https://github.com/Blobby-Boi/), the original owner an
 Open a blank codespace at <https://github.com/codespaces/> and run:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install.sh
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install-epicvm.sh | sudo bash
 ```
 
 ### Linux host / VPS

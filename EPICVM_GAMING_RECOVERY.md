@@ -18,13 +18,13 @@ Scope: retained Hyper-V GPU-P Gaming VM, production dashboard/KVM2, LocalSystem 
 - Windows checkout: `C:\Users\Epic\Documents\Blobe-Vm-Manager`
   - branch: `production`
   - HEAD: `2d30cd3` (`feat: Cloud PC (bring-your-own Sunshine over Tailscale)`)
-  - remote: `https://github.com/EpicRobot9/EpicVM.git`
+  - remote: `https://github.com/EpicIsTheOne/EpicVM.git`
   - working tree: tracked files clean; pre-existing untracked recovery/probe artifacts present (see initial `git status --porcelain` in session transcript). They are preserved and must not be deleted or overwritten.
 - KVM2 checkout: `/opt/blobe-vm/repo`
   - SSH alias: `kvm2` (root transport; credentials not recorded)
   - branch: `production`
   - HEAD: `2d30cd3` (same as Windows checkout)
-  - remote: `https://github.com/EpicRobot9/EpicVM.git`
+  - remote: `https://github.com/EpicIsTheOne/EpicVM.git`
   - working tree: tracked files clean; pre-existing untracked `.hermes/` present and preserved.
 - The intended source branch is `production`; no deployment from `main` or a performance branch is permitted.
 
