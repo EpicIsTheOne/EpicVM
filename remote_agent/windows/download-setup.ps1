@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string] $Repository = 'EpicRobot9/BlobeVM-Manager',
+    [string] $Repository = 'EpicIsTheOne/EpicVM',
     [string] $Branch = 'main',
     [string] $TailscaleAddress,
     [string] $SwitchName,

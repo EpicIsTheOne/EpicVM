@@ -4,7 +4,11 @@ EpicVM is a VM platform for creating, running, routing, and maintaining isolated
 
 > **License and attribution:** EpicVM is distributed under the GNU General Public License, version 3 (GPLv3). Keep the upstream DesktopOnCodespaces attribution and the repository `LICENSE` when copying or redistributing this modified work.
 
-The current repository is still hosted at https://github.com/EpicRobot9/BlobeVM-Manager. A future GitHub rename may follow; the raw repository URLs below intentionally retain this legacy slug until that separately gated change is approved.
+The independent EpicVM repository is hosted at <https://github.com/EpicIsTheOne/EpicVM>.
+
+## Acknowledgements
+
+Thank you to [Blobby-Boi](https://github.com/Blobby-Boi/), the original owner and creator of the project EpicVM grew from. EpicVM has since been substantially expanded while preserving the project's open-source licensing and upstream attribution.
 
 ## Quick start
 
@@ -13,7 +17,7 @@ The current repository is still hosted at https://github.com/EpicRobot9/BlobeVM-
 Open a blank codespace at <https://github.com/codespaces/> and run:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/EpicRobot9/BlobeVM-Manager/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install.sh
 chmod +x install.sh
 ./install.sh
 ```
@@ -23,7 +27,7 @@ chmod +x install.sh
 The canonical public bootstrap entrypoint is `install-epicvm.sh`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EpicRobot9/BlobeVM-Manager/main/install-epicvm.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/install-epicvm.sh | sudo bash
 ```
 
 The installer deploys the EpicVM VM stack, optional Traefik routing, and the EpicVM Dashboard. Verify the installation with:
@@ -62,7 +66,7 @@ On the Windows host, use the one-shot downloader from an elevated PowerShell 7 p
 
 ```powershell
 Invoke-WebRequest `
-  -Uri 'https://raw.githubusercontent.com/EpicRobot9/BlobeVM-Manager/main/remote_agent/windows/download-setup.ps1' `
+  -Uri 'https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/remote_agent/windows/download-setup.ps1' `
   -OutFile "$env:TEMP\EpicVM-RemoteVM-download.ps1"
 pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\EpicVM-RemoteVM-download.ps1"
 ```

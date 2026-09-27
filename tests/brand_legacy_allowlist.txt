@@ -5,4 +5,3 @@ blobevm_ | Prefix for existing VM/container names and runtime discovery.
 com.blobevm.managed | Existing managed-container label/identifier consumed by deployments.
 BLOBEVM_ | Legacy environment-variable namespace used by installers and operators.
 BLOBEDASH_ | Dashboard authentication/state environment-variable namespace for existing installs.
-EpicRobot9/BlobeVM-Manager | Repository slug retained in current GitHub and raw-content URLs until the separately gated repository rename.

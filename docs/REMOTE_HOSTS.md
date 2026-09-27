@@ -18,7 +18,7 @@ If the files are not already checked out, use the one-shot downloader from an
 elevated PowerShell 7 prompt:
 
 ```powershell
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/EpicRobot9/BlobeVM-Manager/main/remote_agent/windows/download-setup.ps1' -OutFile "$env:TEMP\EpicVM-RemoteVM-download.ps1"
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/remote_agent/windows/download-setup.ps1' -OutFile "$env:TEMP\EpicVM-RemoteVM-download.ps1"
 pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\EpicVM-RemoteVM-download.ps1"
 ```
 

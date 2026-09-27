@@ -2,12 +2,12 @@
 
 - **Product:** EpicVM VM platform
 - **Status:** active
-- **Current repository:** https://github.com/EpicRobot9/BlobeVM-Manager
-- **Future rename:** the GitHub repository may be renamed later; it has not been renamed yet.
+- **Current repository:** https://github.com/EpicIsTheOne/EpicVM
+- **Repository status:** independent EpicVM repository, separate from the original BlobeVM fork.
 
 ## Purpose
 
-EpicVM is a Docker-based VM platform with a web dashboard and CLI for creating, routing, monitoring, and maintaining isolated desktop VMs. It is derived from DesktopOnCodespaces and remains under the GNU General Public License version 3 (GPLv3); see `LICENSE` for the complete license text and preserve upstream attribution.
+EpicVM is a Docker-based VM platform with a web dashboard and CLI for creating, routing, monitoring, and maintaining isolated desktop VMs. EpicVM expanded on the original project created by [Blobby-Boi](https://github.com/Blobby-Boi/). It remains under the GNU General Public License version 3 (GPLv3); see `LICENSE` for the complete license text and preserve upstream attribution.
 
 ## Stack
 

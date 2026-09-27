@@ -25,6 +25,6 @@ Use `EpicVM`, `epicvm`, `EpicVM Dashboard`, and `install-epicvm.sh` in new produ
 
 ## Attribution
 
-EpicVM is derived from DesktopOnCodespaces and remains licensed under the GNU General Public License version 3 (GPLv3). Do not remove upstream attribution or alter the repository `LICENSE`.
+EpicVM grew from the original project created by [Blobby-Boi](https://github.com/Blobby-Boi/) and remains licensed under the GNU General Public License version 3 (GPLv3). Preserve this attribution and the repository `LICENSE`.
 
-The current GitHub repository URL is https://github.com/EpicRobot9/BlobeVM-Manager. Documentation must not claim that GitHub has already been renamed.
+The independent EpicVM repository is https://github.com/EpicIsTheOne/EpicVM.

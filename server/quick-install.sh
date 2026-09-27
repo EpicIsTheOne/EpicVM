@@ -3,7 +3,7 @@ set -euo pipefail
 
 # One-line installer for EpicVM on a fresh server (BLOBEVM_* remains compatible)
 # Usage:
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/EpicRobot9/BlobeVM-Manager/main/server/quick-install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/EpicIsTheOne/EpicVM/main/server/quick-install.sh)"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Re-running as root..."
@@ -17,7 +17,7 @@ TMP_DIR="/tmp/epicvm-install-$(date +%s)"
 mkdir -p "$TMP_DIR"
 cd "$TMP_DIR"
 
-REPO_URL="${EPICVM_REPO_URL:-${BLOBEVM_REPO_URL:-https://github.com/EpicRobot9/BlobeVM-Manager.git}}"
+REPO_URL="${EPICVM_REPO_URL:-${BLOBEVM_REPO_URL:-https://github.com/EpicIsTheOne/EpicVM.git}}"
 BRANCH="${EPICVM_BRANCH:-${BLOBEVM_BRANCH:-main}}"
 echo "Cloning EpicVM repo..."
 git clone --branch "$BRANCH" --depth 1 "$REPO_URL" repo

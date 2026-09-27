@@ -1,5 +1,5 @@
-git clone https://github.com/EpicRobot9/BlobeVM-Manager.git BlobeVM-Manager
-cd BlobeVM-Manager
+git clone https://github.com/EpicIsTheOne/EpicVM.git EpicVM
+cd EpicVM
 pip install textual
 sleep 2
 python3 installer.py
@@ -10,9 +10,9 @@ sudo apt update
 sudo apt install -y jq
 
 mkdir Save
-cp -r BlobeVM-Manager/root/config/* Save
+cp -r root/config/* Save
 
-json_file="BlobeVM-Manager/options.json"
+json_file="options.json"
 if jq ".enablekvm" "$json_file" | grep -q true; then
     docker run -d --name=BlobeVM -e PUID=1000 -e PGID=1000 --device=/dev/kvm --security-opt seccomp=unconfined -e TZ=Etc/UTC -e SUBFOLDER=/ -e TITLE=BlobeVM -p 3000:3000 --shm-size="2gb" -v $(pwd)/Save:/config --restart unless-stopped blobevm
 else
@@ -26,17 +26,17 @@ echo "Installing Blobe Optimizer service..."
 
 sudo mkdir -p /opt/blobe-vm
 # Copy the cloned repo into /opt/blobe-vm so dashboard/service can access it.
-# We expect this script to be run from the directory that contains the cloned `BlobeVM` folder
-# (the top-level clone step earlier creates `BlobeVM`). If run elsewhere, try to copy any BlobeVM folder we find.
+# We expect this script to be run from the directory that contains the cloned `EpicVM` folder.
+# If run elsewhere, try to copy a nearby EpicVM checkout.
 REPO_SRC=""
-if [[ -d "$PWD/BlobeVM" ]]; then
-    REPO_SRC="$PWD/BlobeVM"
+if [[ -d "$PWD/EpicVM" ]]; then
+    REPO_SRC="$PWD/EpicVM"
 elif [[ -d "$PWD" && -f "$PWD/installer.py" && -d "$PWD/optimizer" ]]; then
     # Running from repo root already
     REPO_SRC="$PWD"
 else
     # Try to locate a nearby clone
-    FOUND=$(find "$PWD" -maxdepth 2 -type d -name BlobeVM 2>/dev/null | head -n1 || true)
+    FOUND=$(find "$PWD" -maxdepth 2 -type d -name EpicVM 2>/dev/null | head -n1 || true)
     if [[ -n "$FOUND" ]]; then
         REPO_SRC="$FOUND"
     fi
@@ -74,9 +74,9 @@ if [[ (! -d /opt/blobe-vm/optimizer) ]]; then
         sudo rsync -a "$REPO_SRC/optimizer/" /opt/blobe-vm/optimizer/
     else
         echo "Optimizer not found locally; cloning repo from GitHub to retrieve optimizer"
-        TMP_CLONE="/tmp/BlobeVM_installer_$$"
+        TMP_CLONE="/tmp/EpicVM_installer_$$"
         rm -rf "$TMP_CLONE"
-        git clone --depth 1 https://github.com/EpicRobot9/BlobeVM-Manager.git "$TMP_CLONE" || true
+        git clone --depth 1 https://github.com/EpicIsTheOne/EpicVM.git "$TMP_CLONE" || true
         if [[ -d "$TMP_CLONE/optimizer" ]]; then
             sudo mkdir -p /opt/blobe-vm/optimizer
             sudo rsync -a "$TMP_CLONE/optimizer/" /opt/blobe-vm/optimizer/

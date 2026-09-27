@@ -1,8 +1,4 @@
-"""Executable contract checks for the EpicVM public-brand migration.
-
-Compatibility identifiers and the gated current GitHub URL are checked
-separately from visible product copy.
-"""
+"""Executable contract checks for EpicVM's public brand and compatibility ABI."""
 
 from __future__ import annotations
 
@@ -132,9 +128,7 @@ def test_legacy_abi_tokens_are_documented_with_reasons() -> None:
 
 
 def test_current_public_files_contain_no_legacy_public_brand() -> None:
-    """Reject legacy product copy while permitting the gated repository URL."""
-    allowed_url = _allowlist_entries()["EpicRobot9/BlobeVM-Manager"]
-    assert allowed_url
+    """Reject legacy product copy outside documented compatibility tokens."""
     violations = []
     for relative in PUBLIC_FILES:
         path = REPO_ROOT / relative
@@ -143,9 +137,6 @@ def test_current_public_files_contain_no_legacy_public_brand() -> None:
             continue
         text = path.read_text(encoding="utf-8")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            line_without_repository_url = line.replace(
-                "EpicRobot9/BlobeVM-Manager", ""
-            )
-            if "BlobeVM" in line_without_repository_url:
+            if "BlobeVM" in line:
                 violations.append(f"{relative}:{line_number}: {line.strip()}")
     assert not violations, "Visible legacy public-brand uses:\n" + "\n".join(violations)
