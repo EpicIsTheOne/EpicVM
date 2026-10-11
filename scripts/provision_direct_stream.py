@@ -4,8 +4,87 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
+
+
+def patch_stream_navigation(static: Path) -> bool:
+    """Return EpicVM streams to the portal even when stream teardown fails."""
+    path = static / "stream.js"
+    text = path.read_text(encoding="utf-8")
+    marker = '// EpicVM workspace navigation'
+    if marker in text:
+        return False
+    pattern = r'        // Close stream\r?\n.*?        this\.buttonDiv\.appendChild\(this\.exitStreamButton\);'
+    replacement = '''        // EpicVM workspace navigation
+        this.exitStreamButton.innerText = "Back to workspace";
+        this.exitStreamButton.title = "Leave the stream. Your Windows apps stay running.";
+        this.exitStreamButton.addEventListener("click", async () => {
+            this.exitStreamButton.disabled = true;
+            try {
+                const stream = this.app.getStream();
+                if (stream) {
+                    await Promise.race([stream.stop(), new Promise(resolve => setTimeout(resolve, 3000))]);
+                }
+            } catch (error) {
+                console.debug("Stream teardown failed; returning to workspace", error);
+            } finally {
+                window.location.assign("https://techexplore.us/EpicVM/portal");
+            }
+        });
+        this.buttonDiv.appendChild(this.exitStreamButton);'''
+    text, count = re.subn(pattern, lambda _: replacement, text, flags=re.DOTALL)
+    if count != 1:
+        raise RuntimeError("Pinned Moonlight exit control layout changed")
+    path.write_text(text, encoding="utf-8")
+    return True
+
+
+def patch_stream_recovery(static: Path) -> bool:
+    """Install bounded recovery on the pinned host-local viewer."""
+    path = static / 'stream.js'
+    text = path.read_text(encoding='utf-8')
+    marker = '// EpicVM automatic connection recovery v1'
+    changed = False
+    if marker not in text:
+        anchor = '        window["app"] = app;'
+        old_stop = '                const stopped = yield oldStream.stop();'
+        if text.count(anchor) != 1 or text.count(old_stop) != 1:
+            raise RuntimeError('Pinned Moonlight reconnect layout changed')
+        text = text.replace(anchor, anchor + '\n        ' + marker + '\n        installStreamRecovery(app);')
+        text = 'import { installStreamRecovery } from "./epicvm_recovery.js?v=1";\n' + text
+        text = text.replace(old_stop, '''                const stopped = yield Promise.race([
+                    Promise.resolve().then(() => oldStream.stop()).catch(() => false),
+                    new Promise(resolve => setTimeout(() => resolve(false), 3000))
+                ]);
+                // Release old transports even when the server disappeared.
+                oldStream.ws?.close();
+                if (oldStream.transport) {
+                    yield Promise.race([
+                        Promise.resolve().then(() => oldStream.transport.close()).catch(() => {}),
+                        new Promise(resolve => setTimeout(resolve, 1000))
+                    ]);
+                }''')
+        path.write_text(text, encoding='utf-8')
+        changed = True
+    source = Path(__file__).with_name('stream_recovery.js').read_text(encoding='utf-8')
+    network_import = 'import { installStreamNetwork } from "./epicvm_network.js?v=1";'
+    text = path.read_text(encoding='utf-8')
+    if network_import not in text:
+        text = network_import + '\n' + text.replace('        installStreamRecovery(app);', '        installStreamRecovery(app);\n        installStreamNetwork(app);')
+        path.write_text(text, encoding='utf-8')
+        changed = True
+    network = static / 'epicvm_network.js'
+    network_source = Path(__file__).with_name('stream_network.js').read_text(encoding='utf-8')
+    if not network.exists() or network.read_text(encoding='utf-8') != network_source:
+        network.write_text(network_source, encoding='utf-8')
+        changed = True
+    module = static / 'epicvm_recovery.js'
+    if not module.exists() or module.read_text(encoding='utf-8') != source:
+        module.write_text(source, encoding='utf-8')
+        changed = True
+    return changed
 
 
 def patch_audio_player(static: Path) -> bool:
@@ -33,6 +112,38 @@ def patch_audio_player(static: Path) -> bool:
     path.write_text(text.replace(old_track, new_track).replace(old_interaction, new_interaction),
                     encoding="utf-8")
     return True
+
+
+def patch_gamepad_input(static: Path) -> bool:
+    """Keep Moonlight's protocol slots independent of browser gamepad indices."""
+    path = static / "stream" / "input.js"
+    text = path.read_text(encoding="utf-8")
+    replacements = (
+        ("this.sendControllerAdd(this.gamepads.length - 1, SUPPORTED_BUTTONS, capabilities);",
+         "this.sendControllerAdd(id, SUPPORTED_BUTTONS, capabilities);"),
+        ("const id = (_a = this.gamepads[index]) === null || _a === void 0 ? void 0 : _a.gamepadIndex;",
+         "const id = index;"),
+        ("if (oldGamepadState == null) {\n                return;\n            }",
+         "if (oldGamepadState == null) {\n                continue;\n            }"),
+        ("this.gamepadRumbleCurrent[0] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 };",
+         "this.gamepadRumbleCurrent[gamepad.index] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 };"),
+        ("capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE;",
+         "capabilities |= StreamControllerCapabilities.CAPABILITY_RUMBLE;"),
+        ("capabilities = StreamControllerCapabilities.CAPABILITY_TRIGGER_RUMBLE;",
+         "capabilities |= StreamControllerCapabilities.CAPABILITY_TRIGGER_RUMBLE;"),
+    )
+    changed = False
+    for before, after in replacements:
+        if after in text:
+            continue
+        expected = 3 if before == "capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE;" else 1
+        if text.count(before) != expected:
+            raise RuntimeError("Pinned Moonlight gamepad input layout changed")
+        text = text.replace(before, after)
+        changed = True
+    if changed:
+        path.write_text(text, encoding="utf-8")
+    return changed
 
 
 def provision(*, source_data: Path, template_config: Path, package: Path,
@@ -81,6 +192,9 @@ def provision(*, source_data: Path, template_config: Path, package: Path,
     (target / "server").mkdir(parents=True)
     shutil.copytree(package / "static", target / "static")
     patch_audio_player(target / "static")
+    patch_gamepad_input(target / "static")
+    patch_stream_navigation(target / "static")
+    patch_stream_recovery(target / "static")
     shutil.copy2(package / "streamer.exe", target / "streamer.exe")
     settings = target / "static" / "default_settings.js"
     text = settings.read_text(encoding="utf-8")

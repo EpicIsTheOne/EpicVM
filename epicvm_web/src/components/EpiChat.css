@@ -17,3 +17,10 @@
 @keyframes epi-greet{0%,100%{transform:rotate(-2deg) translateY(0)}50%{transform:rotate(2deg) translateY(-3px)}}
 @media(max-width:520px){.epi-shell{right:12px;bottom:12px}.epi-launch{width:225px;min-height:105px;padding:9px 10px 9px 0;border-radius:23px}.epi-launch .epi-launch-art{width:82px;height:86px}.epi-launch-copy strong{font-size:14px}.epi-launch .epi-launch-copy>span:nth-child(2){font-size:10px}.epi-launch .epi-launch-action{font-size:10px;padding:5px 8px}.epi-panel{width:calc(100vw - 24px);height:calc(100vh - 28px)}}
 @media(prefers-reduced-motion:reduce){.epi-mascot{animation:none}.epi-launch{transition:none}}
+/* Compact mobile helper, leaving room to scroll every action above it. */
+@media(max-width:520px){
+ .epi-launch{width:52px;min-height:52px;height:52px;padding:4px;border-radius:50%;justify-content:center}
+ .epi-launch .epi-launch-art{width:42px;height:42px}
+ .epi-launch .epi-launch-copy{display:none}
+ .evm-portal{padding-bottom:80px}
+}

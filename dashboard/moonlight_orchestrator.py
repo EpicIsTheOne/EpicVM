@@ -149,7 +149,6 @@ class MoonlightOrchestrator:
         webrtc_nat_host: str | None = None,
         digests: Mapping[str, str] | None = None,
         tcp_probe: Callable[[str, int, float], bool] | None = None,
-        disk_probe: Callable[[], bool] | None = None,
         route_owner_probe: Callable[[str], bool] | None = None,
         routing_probe: Callable[[], bool] | None = None,
         auth_status_probe: Callable[[str], bool] | None = None,
@@ -177,11 +176,12 @@ class MoonlightOrchestrator:
             )
         self.digests = dict(digests or {})
         self.tcp_probe = tcp_probe or self._tcp_probe
-        self.disk_probe = disk_probe or self._disk_ready
         self.route_owner_probe = route_owner_probe or self._route_available
         self.routing_probe = routing_probe or self._routing_available
         self.auth_status_probe = auth_status_probe or self._public_auth_rejected
         self.command_runner = command_runner or subprocess.run
+        self._docker_snapshot = None
+        self._docker_snapshot_at = 0.0
         # Tests inject this.  Production uses urllib directly with a private
         # Docker-network address and a short timeout.
         self.http_request = http_request
@@ -207,22 +207,26 @@ class MoonlightOrchestrator:
             raise ConsoleOrchestrationError("The Traefik router priority is invalid.", status=503, code="routing_config_invalid")
         return self.public_host, self.tls_resolver, priority
 
-    def _disk_ready(self) -> bool:
-        candidate = self.root
-        while not candidate.exists() and candidate != candidate.parent:
-            candidate = candidate.parent
-        usage = shutil.disk_usage(candidate)
-        used = ((usage.total - usage.free) / usage.total * 100) if usage.total else 100
-        return usage.free >= 20 * 1024**3 and used < 85
+    def _docker_records(self):
+        # Build/stage gates run consecutively. Share a fresh inventory for one
+        # second, then invalidate it before creating any new container bundle.
+        if self._docker_snapshot is not None and time.monotonic() - self._docker_snapshot_at < 1.0:
+            return self._docker_snapshot
+        listed = self.command_runner(["docker", "ps", "-aq"], check=True, capture_output=True, text=True)
+        ids = str(getattr(listed, "stdout", "") or "").split()
+        records = []
+        if ids:
+            inspected = self.command_runner(["docker", "inspect", *ids], check=True, capture_output=True, text=True)
+            records = json.loads(str(getattr(inspected, "stdout", "[]") or "[]"))
+            if not isinstance(records, list):
+                raise ValueError("Invalid Docker inventory")
+        self._docker_snapshot = records
+        self._docker_snapshot_at = time.monotonic()
+        return records
 
     def _route_available(self, route_prefix: str) -> bool:
         try:
-            listed = self.command_runner(["docker", "ps", "-aq"], check=True, capture_output=True, text=True)
-            ids = str(getattr(listed, "stdout", "") or "").split()
-            if not ids:
-                return True
-            inspected = self.command_runner(["docker", "inspect", *ids], check=True, capture_output=True, text=True)
-            records = json.loads(str(getattr(inspected, "stdout", "[]") or "[]"))
+            records = self._docker_records()
             variants = (route_prefix, route_prefix.rstrip("/"))
             for record in records:
                 labels = (((record or {}).get("Config") or {}).get("Labels") or {})
@@ -237,12 +241,8 @@ class MoonlightOrchestrator:
         _, resolver, _ = self._routing_config()
         try:
             self.command_runner(["docker", "network", "inspect", self.proxy_network], check=True, capture_output=True, text=True)
-            listed = self.command_runner(["docker", "ps", "-q"], check=True, capture_output=True, text=True)
-            ids = str(getattr(listed, "stdout", "") or "").split()
-            if not ids:
-                return False
-            inspected = self.command_runner(["docker", "inspect", *ids], check=True, capture_output=True, text=True)
-            records = json.loads(str(getattr(inspected, "stdout", "[]") or "[]"))
+            records = [record for record in self._docker_records()
+                       if ((record or {}).get("State") or {}).get("Running", True)]
             dashboard = any(
                 str((record or {}).get("Name") or "").lstrip("/") == "blobedash"
                 and self.proxy_network in (((record or {}).get("NetworkSettings") or {}).get("Networks") or {})
@@ -444,12 +444,11 @@ networks:
         target = self._instance_root(plan.name)
         if target.exists():
             raise ConsoleOrchestrationError("A console instance with this name already exists.", status=409, code="console_exists")
-        if not self.disk_probe():
-            raise ConsoleOrchestrationError("kvm2 storage is below the provisioning safety threshold.", status=507, code="storage_gate")
         if not self.routing_probe():
             raise ConsoleOrchestrationError("The verified Traefik authentication or TLS route is unavailable.", status=503, code="routing_probe_failed")
         if not self.route_owner_probe(plan.route_prefix):
             raise ConsoleOrchestrationError("The requested console route is already owned.", status=409, code="route_collision")
+        self._docker_snapshot = None
         target.parent.mkdir(parents=True, exist_ok=True)
         # Reserve atomically across dashboard workers, including stopped bundles.
         # Keep reservations during quarantine so repair/restart cannot steal a

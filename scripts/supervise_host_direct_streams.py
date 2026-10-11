@@ -19,11 +19,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from urllib import request
 
 import psutil
 
-from provision_direct_stream import patch_audio_player, provision
+from provision_direct_stream import patch_audio_player, patch_gamepad_input, patch_stream_navigation, patch_stream_recovery, provision
 
 SOURCE = "/opt/epicvm/moonlight-instances"
 HOST_URL = "https://epicbriiiii.zapto.org"
@@ -33,6 +34,32 @@ FRAME_PROBE = "/app/complete_host_frame_probe.py"
 UDP_FIRST = 40900
 UDP_LAST = 41199
 UDP_WIDTH = 11
+SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+               "-o", "Hostname=100.114.225.31", "-o", "HostKeyAlias=72.60.29.204"]
+_frame_probe_lock = threading.Lock()
+CADDY_EXE = Path(r"C:\Users\Epic\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe")
+CADDY_CONFIG = Path(r"E:\Projects\WindowsStream\config\caddy\Caddyfile")
+
+
+def _ensure_caddy(root: Path) -> None:
+    """Recover the shared HTTPS gateway without stopping any existing process."""
+    if _listener_pid(2019):
+        return
+    if any(process.info.get("name", "").lower() == "caddy.exe"
+           for process in psutil.process_iter(["name"])):
+        raise RuntimeError("Caddy is running but its administration listener is unavailable")
+    subprocess.run([str(CADDY_EXE), "validate", "--config", str(CADDY_CONFIG)],
+                   capture_output=True, check=True, timeout=20)
+    with (root / "caddy-startup.log").open("ab") as output:
+        subprocess.Popen([str(CADDY_EXE), "run", "--config", str(CADDY_CONFIG)],
+                         stdout=output, stderr=output,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+    for _ in range(40):
+        if _listener_pid(2019):
+            print("Recovered Caddy HTTPS gateway", flush=True)
+            return
+        time.sleep(.25)
+    raise RuntimeError("Caddy did not open its administration listener")
 
 
 def _read(path: Path) -> dict:
@@ -50,6 +77,28 @@ def _listener_pid(port: int) -> int | None:
         if connection.status == psutil.CONN_LISTEN and connection.laddr.port == port:
             return connection.pid
     return None
+
+
+def _ensure_local_gateway(root: Path) -> None:
+    settings_path = root / 'local-gateway.json'
+    if not settings_path.exists():
+        return
+    settings = json.loads(settings_path.read_text(encoding='utf-8-sig'))
+    if not settings.get('enabled'):
+        return
+    subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    str(Path(__file__).with_name('Start-EpicVMLocalGateway.ps1')), '-Root', str(root)],
+                   capture_output=True, check=True, timeout=20)
+    digest = hashlib.sha256((root / 'caddy-routes.caddy').read_bytes()).hexdigest()
+    marker = root / '.lan-caddy-applied'
+    if marker.exists() and marker.read_text() == digest:
+        return
+    env = dict(os.environ)
+    env['CF_API_TOKEN'] = (root / 'lan-dns.token').read_text().strip()
+    subprocess.run([str(root / 'caddy-lan.exe'), 'reload', '--address', '127.0.0.1:2020',
+                    '--config', str(root / 'Caddyfile.lan')], env=env,
+                   capture_output=True, check=True, timeout=20)
+    marker.write_text(digest)
 
 
 def _start_gateway(root: Path) -> None:
@@ -203,14 +252,14 @@ def _refresh_seat_pairing(root: Path, route: str, port: int, source_data: dict) 
 
 
 def _read_source_data(source: str) -> dict:
-    result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "kvm2",
+    result = subprocess.run(["ssh", *SSH_OPTIONS, "kvm2",
                              "cat", f"{SOURCE}/{source}/server/data.json"],
                             capture_output=True, timeout=20, check=True)
     return json.loads(result.stdout)
 
 
 def _source_names() -> set[str]:
-    command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "kvm2",
+    command = ["ssh", *SSH_OPTIONS, "kvm2",
                f"find {SOURCE} -mindepth 3 -maxdepth 3 -name data.json -printf '%h\\n'"]
     result = subprocess.run(command, capture_output=True, text=True, timeout=20, check=True)
     return {name for line in result.stdout.splitlines()
@@ -226,7 +275,7 @@ def _route_name(source: str) -> str:
 
 def _verify_pending_gaming_route(root: Path, routes: dict) -> None:
     """Use actual decoded browser frames to finish pending gaming VM setup."""
-    command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "kvm2",
+    command = ["ssh", *SSH_OPTIONS, "kvm2",
                "docker", "exec", "blobedash", "python3", FRAME_PROBE, "list"]
     try:
         response = subprocess.run(command, capture_output=True, text=True,
@@ -270,7 +319,7 @@ def _verify_pending_gaming_route(root: Path, routes: dict) -> None:
 def _import_one(root: Path, source: str, route: str, port: int, udp_port: int) -> dict | None:
     with tempfile.TemporaryDirectory(dir=root) as scratch:
         imported = Path(scratch) / "data.json"
-        subprocess.run(["scp", "-q", f"kvm2:{SOURCE}/{source}/server/data.json", str(imported)],
+        subprocess.run(["scp", "-q", *SSH_OPTIONS, f"kvm2:{SOURCE}/{source}/server/data.json", str(imported)],
                        capture_output=True, timeout=30, check=True)
         data = _read(imported)
         hosts = data.get("hosts") or {}
@@ -295,6 +344,7 @@ def sync(root: Path) -> None:
     routes_path = root / "routes.json"
     dashboard_path = root / "dashboard-manifest.json"
     routes, dashboard = _read(routes_path), _read(dashboard_path)
+    _ensure_caddy(root)
     names = _source_names()
     changed = False
     for source in sorted(names):
@@ -317,7 +367,7 @@ def sync(root: Path) -> None:
         port = (int(routes[route]["localPort"]) if route in routes else
                 next(port for port in range(8091, 8190)
                      if port not in occupied and not _listener_pid(port)))
-        if route in routes:
+        if route in routes and (root / route / "server" / "config.json").is_file():
             old_range = _read(root / route / "server" / "config.json")["webrtc"]["port_range"]
             udp = int(old_range["min"])
             if (udp < UDP_FIRST or int(old_range["max"]) > UDP_LAST
@@ -362,8 +412,8 @@ def sync(root: Path) -> None:
     if not caddy_marker.exists() or caddy_marker.read_text() != route_hash:
         subprocess.run([sys.executable, str(Path(__file__).with_name("write_direct_stream_caddy.py")),
                         str(root)], check=True, timeout=20)
-        caddy = Path(r"C:\Users\Epic\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe")
-        caddyfile = Path(r"E:\Projects\WindowsStream\config\caddy\Caddyfile")
+        caddy = CADDY_EXE
+        caddyfile = CADDY_CONFIG
         subprocess.run([str(caddy), "validate", "--config", str(caddyfile)],
                        capture_output=True, check=True, timeout=20)
         subprocess.run([str(caddy), "reload", "--config", str(caddyfile)],
@@ -373,21 +423,41 @@ def sync(root: Path) -> None:
     manifest_hash = hashlib.sha256(dashboard_path.read_bytes()).hexdigest()
     manifest_marker = root / ".manifest-published"
     if not manifest_marker.exists() or manifest_marker.read_text() != manifest_hash:
-        subprocess.run(["scp", "-q", str(dashboard_path),
+        subprocess.run(["scp", "-q", *SSH_OPTIONS, str(dashboard_path),
                         "kvm2:/opt/blobe-vm/private/direct-streams.json.new"],
                        capture_output=True, check=True, timeout=30)
-        subprocess.run(["ssh", "kvm2", "install -m 0600 /opt/blobe-vm/private/direct-streams.json.new "
+        subprocess.run(["ssh", *SSH_OPTIONS, "kvm2", "install -m 0600 /opt/blobe-vm/private/direct-streams.json.new "
                         "/opt/blobe-vm/private/direct-streams.json && "
                         "rm /opt/blobe-vm/private/direct-streams.json.new"],
                        capture_output=True, check=True, timeout=30)
         manifest_marker.write_text(manifest_hash)
 
     _start_gateway(root)
+    try:
+        _ensure_local_gateway(root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f'Local gateway will retry: {type(exc).__name__}', flush=True)
     for route, record in routes.items():
         if record.get("enabled"):
             patch_audio_player(root / route / "static")
+            patch_gamepad_input(root / route / "static")
+            patch_stream_navigation(root / route / "static")
+            patch_stream_recovery(root / route / "static")
             _start_instance(root, route, int(record["localPort"]))
-    _verify_pending_gaming_route(root, routes)
+    _schedule_frame_probe(root, routes)
+
+
+def _schedule_frame_probe(root: Path, routes: dict) -> None:
+    # Gaming VM frame certification must not block publishing a friend's seat.
+    if not _frame_probe_lock.acquire(blocking=False):
+        return
+    snapshot = {name: dict(record) for name, record in routes.items()}
+    def run():
+        try:
+            _verify_pending_gaming_route(root, snapshot)
+        finally:
+            _frame_probe_lock.release()
+    threading.Thread(target=run, daemon=True).start()
 
 
 if __name__ == "__main__":
@@ -402,4 +472,4 @@ if __name__ == "__main__":
             print(f"Direct stream sync will retry: {type(exc).__name__}: {exc}", flush=True)
         if not args.watch:
             break
-        time.sleep(30)
+        time.sleep(5)

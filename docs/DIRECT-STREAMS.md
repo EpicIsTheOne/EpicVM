@@ -29,11 +29,16 @@ starts their host-local Moonlight processes, registers their Caddy and portal
 routes, and restarts a missing process. A quarantined seat is disabled and its
 stream process stopped; its Windows account and profile remain reusable.
 `scripts/Start-EpicVMDirectStreams.ps1` starts the supervisor. WindowsStream's
-start script also calls it. A per-user Windows Startup shortcut starts it after
-sign-in.
+start script also calls it. `scripts/Install-EpicVMDirectStreamsStartup.ps1`
+installs the `EpicVM Direct Streams` logon task with a 15-second delay and
+disables the old Startup shortcut. Run the installer elevated on the host.
+The task starts the supervisor in the user's session. The supervisor validates
+and starts the shared Caddy gateway when its admin listener is missing and no
+Caddy process is running. An existing process without its listener is reported
+for inspection rather than replaced.
 
 The firewall rule `EpicVM Direct Streams WebRTC UDP` permits the Moonlight Web
-executable on UDP ports 40022-40200. The supervisor refuses to allocate a
+executable on UDP ports 40900-41199. The supervisor refuses to allocate a
 stream outside that range. The host router did not expose UPnP mappings during
 setup, so ICE may use STUN or TURN according to the bundled configuration.
 
@@ -53,3 +58,61 @@ setup, so ICE may use STUN or TURN according to the bundled configuration.
 
 The original KVM2 Moonlight bundles remain available for repair, while EpicVM's
 normal launch path uses the Windows host routes.
+
+## Local network mode
+
+The desktop card offers Open over local network only for a host enabled in
+`/opt/blobe-vm/private/local-streams.json`. Example (after gateway verification):
+
+```json
+{"epic-pc":{"enabled":true,"origin":"https://lan.epicvm.techexplore.us:8443"}}
+```
+
+Both opening options POST to the existing desktop endpoint. The local option
+then uses `?connection=local` on the same authenticated stream-launch route.
+The dashboard rechecks seat ownership and signs the existing one-use grant.
+The launcher probes the configured local origin for five seconds before
+submitting it; browser local-network permission may be required. On failure,
+Use normal connection requests a fresh grant for the same stream and seat.
+No grant is placed in a shareable URL. Sharing a stream-launch URL still
+requires the recipient's own account and resource assignment.
+
+Some routers filter public DNS answers containing private addresses. The host's
+current router returns an empty answer for the LAN hostname even though
+Cloudflare and Google resolve it correctly. On affected devices, enable Secure
+DNS using Cloudflare or Google in the browser, or allow this hostname in the
+router's DNS settings. Do not disable TLS verification. The normal connection
+remains available when local DNS or reachability fails.
+
+Gateway setup:
+
+1. Reserve the host's Ethernet IP in the router. The current IP is 192.168.1.178;
+   DHCP reservation has not been verified. Publish a DNS-only A record for
+   lan.epicvm.techexplore.us pointing to that IP.
+2. Install a dedicated Caddy Windows binary with dns.providers.cloudflare in
+   the private stream root as caddy-lan.exe. Keep the public Caddy untouched.
+3. Store a token with DNS Edit and Zone Read on techexplore.us in the private
+   stream root as lan-dns.token. Use API Proxy injection; do not print it.
+4. Run Configure-EpicVMLocalGateway.ps1 elevated with -Address 192.168.1.178.
+   The separate gateway binds only that address on 8443. Its firewall rule
+   permits TCP from LocalSubnet; no new router forwarding is needed.
+5. Verify trusted HTTPS, renewal configuration, unauthenticated stream denial,
+   and an authorized launch. Then enable the host's local-streams.json entry.
+
+Start-EpicVMDirectStreams.ps1 starts the dedicated LAN gateway when configured;
+the supervisor recovers it and reloads route changes independently. DNS-01 lets
+Caddy renew a trusted certificate for a private LAN address automatically.
+Keep the DNS token outside the repo. Do not enable an origin with a self-signed
+certificate, a missing token, or an unverified gateway.
+
+Both normal and local viewers show their selected WebRTC connection and RTT when stats are
+available. LAN connected requires host candidates with private IPv4 addresses
+on the same /24, conservatively matching this host network. Masked candidate
+addresses or another subnet produce Direct video connection rather than an
+unsupported LAN claim; relay candidates show Video uses a relay. RTT is a
+network round trip, not complete input-to-display latency. Switching connection
+does not change video quality or bypass authentication. A second-device
+comparison is still required before claiming a latency improvement.
+
+The same candidate-pair RTT measurement is used on both paths. WebSocket
+fallback displays the streamer's browser RTT when reported, or RTT unavailable.

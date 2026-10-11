@@ -1,4 +1,5 @@
 // EpicVM web API client. All endpoints are same-origin under /EpicVM/api or /portal/api.
+import { checkSessionResponse, sessionVersion } from './session'
 const PORTAL = '/portal'
 const EPICVM = '/EpicVM/api'
 
@@ -8,6 +9,7 @@ function hostQuery(hostId) {
 }
 
 async function apiFetch(path, opts = {}) {
+  const version = sessionVersion()
   const { timeoutMs = 15000, ...fetchOptions } = opts
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
@@ -25,6 +27,7 @@ async function apiFetch(path, opts = {}) {
   }
   let body = {}
   try { body = await res.json() } catch { /* ignore */ }
+  if (!path.endsWith('/auth/login') && !path.endsWith('/auth/logout') && path !== `${EPICVM}/me`) checkSessionResponse(res, version)
   return { ok: res.ok, status: res.status, body }
 }
 
@@ -49,7 +52,9 @@ export async function logout() {
 
 export async function me() {
   const res = await apiFetch(`${EPICVM}/me`)
-  return res.body && res.body.authenticated ? res.body : null
+  if (res.status === 401) return null
+  if (!res.ok || typeof res.body.authenticated !== 'boolean') throw new Error('Unable to check your sign-in. Please try again.')
+  return res.body.authenticated ? res.body : null
 }
 
 // Portal VM list for an approved user (used by the portal-redirect status view).

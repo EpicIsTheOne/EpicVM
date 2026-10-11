@@ -3,6 +3,53 @@ BeforeAll {
 }
 
 Describe 'Host gaming owner and seat policy' {
+    It 'waits for Apollo to receive the pending Moonlight handshake' {
+        $script:HostGamingRoot = $TestDrive
+        Mock Initialize-EpicVMHostGaming {}
+        Mock Get-EpicVMHostGamingAccount { 'EpicVM_alice' }
+        Mock Get-EpicVMHostGamingView { @{seats=@(@{accountName='EpicVM_alice';status='Ready';portBase=48100})} }
+        Mock Get-EpicVMApolloAuth { @{username='test';password='test'} }
+        Mock Invoke-WebRequest {}
+        Mock Start-Sleep {}
+        $script:pinAttempts = 0
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*/api/clients/list') { return @{named_certs=@(@{uuid='existing'})} }
+            $script:pinAttempts++
+            return @{status=($script:pinAttempts -ge 3)}
+        }
+        (Pair-EpicVMHostGaming @{owner='portal:alice';pin='1234'}).paired | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 3 -ParameterFilter { $Uri -like '*/api/pin' }
+        Should -Invoke Start-Sleep -Times 2
+        ((Get-Content (Join-Path $TestDrive 'EpicVM_alice.pending-pair.json') -Raw | ConvertFrom-Json).ids) | Should -Contain 'existing'
+    }
+
+    It 'grants launch and input only to the client created by this pairing' {
+        $script:HostGamingRoot = $TestDrive
+        Mock Initialize-EpicVMHostGaming {}
+        Mock Get-EpicVMHostGamingAccount { 'EpicVM_alice' }
+        Mock Get-EpicVMHostGamingView { @{seats=@(@{accountName='EpicVM_alice';status='Ready';portBase=48100})} }
+        Mock Get-EpicVMApolloAuth { @{username='test';password='test'} }
+        Mock Invoke-WebRequest {}
+        $script:clientLists = 0
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*/api/clients/list') {
+                $script:clientLists++
+                $clients = @(@{uuid='existing';name='Other client'})
+                if ($script:clientLists -gt 1) { $clients += @{uuid='new';name='EpicVMWeb (2)';display_mode='';enable_legacy_ordering=$true} }
+                return @{named_certs=$clients}
+            }
+            return @{status=$true}
+        }
+        (Pair-EpicVMHostGaming @{owner='portal:alice';pin='1234'}).paired | Should -BeTrue
+        (Complete-EpicVMHostGamingPair @{owner='portal:alice'}).paired | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -like '*/api/clients/update' -and
+            ($Body | ConvertFrom-Json).uuid -eq 'new' -and
+            ($Body | ConvertFrom-Json).perm -eq 0x07001F00 -and
+            ($Body | ConvertFrom-Json).allow_client_commands -eq $false
+        }
+    }
+
     It 'uses readable, stable names for new seat accounts' {
         Mock Get-LocalUser { $null }
         $a = Get-EpicVMHostGamingAccount 'portal:alice'
@@ -44,6 +91,7 @@ Describe 'Host gaming owner and seat policy' {
         Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/launch' | Should -BeTrue
         Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/desktop' | Should -BeTrue
         Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/stop' | Should -BeTrue
+        Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/pair/complete' | Should -BeTrue
         Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/recover' | Should -BeTrue
         Test-EpicVMMutationRequest -Method POST -Path '/v1/host-gaming/games/remove' | Should -BeTrue
     }

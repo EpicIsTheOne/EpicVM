@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = Join-Path $env:LOCALAPPDATA 'EpicVM\direct-streams'
+& (Join-Path $PSScriptRoot 'Start-EpicVMLocalGateway.ps1') -Root $root
 $supervisor = Join-Path $PSScriptRoot 'supervise_host_direct_streams.py'
 if (-not (Test-Path -LiteralPath (Join-Path $root 'signing.key'))) {
     return

@@ -4752,8 +4752,12 @@ def epicvm_public_me_api():
 @portal_auth_required
 def portal_vms_api():
     user = request.portal_user
-    resources, providers = _resource_inventory(include_cloudpcs=True)
-    _migrate_legacy_resource_access(resources)
+    # Multiseat-only accounts have no VM grants to resolve. Keep their frequent
+    # portal polls independent of slow VM providers and Docker discovery.
+    resources, providers = [], []
+    if user.get('assignedVms') or any(r.get('resourceType') == 'vm' for r in user.get('assignedResources') or []):
+        resources, providers = _resource_inventory(include_cloudpcs=True)
+        _migrate_legacy_resource_access(resources)
     user = _get_user_by_username(user['username']) or user
     all_resources = {item['resourceKey']: item for item in resources}
     vms = []

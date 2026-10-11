@@ -70,6 +70,14 @@ Describe 'EpicVM agent capabilities and routing' {
         $response.Body.error.code | Should -Be 'not_found'
     }
 
+    It 'returns provider failures without masking the original error' {
+        $state.Provider.GetVMs = { throw [System.InvalidOperationException]::new('Fixture provider unavailable.') }
+        $response = Invoke-EpicVMApiRequest -State $state -Method 'GET' -Path '/v1/vms' -Headers @{ Authorization = 'Bearer test-secret-token' }
+        $response.StatusCode | Should -Be 502
+        $response.Body.error.code | Should -Be 'provider_error'
+        $response.Body.error.message | Should -Be 'Fixture provider unavailable.'
+    }
+
     It 'uses the documented lifecycle routes and DELETE verb' {
         $start = Invoke-EpicVMApiRequest -State $state -Method 'POST' -Path '/v1/vms/alpha/start' -Headers @{ Authorization = 'Bearer test-secret-token' }
         $delete = Invoke-EpicVMApiRequest -State $state -Method 'DELETE' -Path '/v1/vms/alpha' -Headers @{ Authorization = 'Bearer test-secret-token' }

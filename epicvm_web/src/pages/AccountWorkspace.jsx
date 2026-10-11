@@ -57,6 +57,7 @@ function Login({ onLogin, management }) {
     } catch (err) { setError(err.message) }
     setBusy(false)
   }
+  if (!management) return <section className="aw-card aw-login"><ShieldCheck size={32} /><h1>Sign in to your account</h1><p>Use your EpicVM account to manage settings and requests.</p><Link className="aw-primary" to="/signin" state={{ from: '/settings' }}>Sign in to EpicVM</Link><p><Link to="/Management">Administrator sign-in</Link></p></section>
   return <section className="aw-card aw-login"><ShieldCheck size={32} /><h1>Welcome to EpicVM</h1>
     <p>Sign in to {management ? 'manage accounts and requests' : 'manage your account'}.</p>
     <form onSubmit={submit}>
@@ -352,7 +353,7 @@ export default function AccountWorkspace({ management = false }) {
   const who = session?.user
   const tickets = content?.tickets || []
   const filtered = tickets.filter(t => closed || !['fulfilled', 'resolved', 'declined'].includes(t.status)).filter(t => tab === 'reports' ? t.kind !== 'vm' : t.kind === 'vm')
-  return <div className="aw"><header className="aw-header"><Link to="/" className="aw-brand"><span>E</span> EpicVM</Link><nav aria-label="Account navigation"><Link to="/portal">My machines</Link><Link to="/settings" aria-current={!management ? 'page' : undefined}><Gear /> Settings</Link>{who?.isAdmin && <Link to="/Management" aria-current={management ? 'page' : undefined}><ShieldCheck /> Management</Link>}{who && <button onClick={() => signout().catch(err => setError(err.message))}>Sign out</button>}</nav></header>
+  return <div className="aw"><header className="aw-header"><Link to="/" className="aw-brand"><span>E</span> EpicVM</Link><nav aria-label="Account navigation"><Link to="/portal">Your workspace</Link><Link to="/settings" aria-current={!management ? 'page' : undefined}><Gear /> Settings</Link>{who?.isAdmin && <Link to="/Management" aria-current={management ? 'page' : undefined}><ShieldCheck /> Management</Link>}{who && <button onClick={() => signout().catch(err => setError(err.message))}>Sign out</button>}</nav></header>
     <main className="aw-main">{checking ? <p role="status">Checking your session…</p> : !who || who.reauthenticate ? <><Login management={management || who?.realm === 'dashboard-config'} onLogin={loadSession} />{who?.reauthenticate && <p className="aw-meta">Your older admin session needs a fresh sign-in for account settings.</p>}</> : management && !who.isAdmin ? <section className="aw-card"><h1>Administrator access required</h1><p>Your settings and requests are available in your account.</p><Link to="/settings">Open Settings</Link></section> : <>
       <div className="aw-heading"><div><div className="aw-eyebrow">{management ? 'EPICVM ADMIN' : 'YOUR ACCOUNT'}</div><h1>{management ? 'Management' : 'Settings'}</h1><p>{management ? 'Machines, people, and requests in one focused workspace.' : `Signed in as ${who.username} · ${who.realm === 'portal' ? 'EpicVM account' : 'Dashboard administrator'}`}</p></div>{management && <a href="/Dashboard/" className="aw-full">Advanced dashboard ↗</a>}</div>
       {notice && <div className="aw-notice" role="status"><CheckCircle size={20} />{notice}<button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}{error && <div className="aw-error" role="alert">{error} <button onClick={loadContent}>Retry</button></div>}

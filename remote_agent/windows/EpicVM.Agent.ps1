@@ -444,6 +444,9 @@ function Invoke-EpicVMApiRequest {
         if ($normalizedPath -eq '/v1/host-gaming/pair' -and $Method -eq 'POST') {
             return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Pair-EpicVMHostGaming (Get-EpicVMRequestBody -Body $Body))
         }
+        if ($normalizedPath -eq '/v1/host-gaming/pair/complete' -and $Method -eq 'POST') {
+            return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Complete-EpicVMHostGamingPair (Get-EpicVMRequestBody -Body $Body))
+        }
         if ($normalizedPath -eq '/v1/host-gaming/recover' -and $Method -eq 'POST') {
             return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Recover-EpicVMHostGaming (Get-EpicVMRequestBody -Body $Body))
         }
@@ -812,7 +815,8 @@ function Invoke-EpicVMApiRequest {
         $errorCode = [string](Get-EpicVMProperty -Object $_.Exception -Name 'ErrorCode' -Default 'provider_error')
         $message = [string]$_.Exception.Message
         if ($message -match 'token|authorization|secret|password') { $message = 'The provider request failed.' }
-        $status = [int](Get-EpicVMProperty -Object $_.Exception -Name 'HttpStatus' -Default (if ($errorCode -eq 'NotFound') { 404 } elseif ($errorCode -eq 'InvalidInput') { 400 } elseif ($errorCode -eq 'Conflict') { 409 } elseif ($errorCode -eq 'UnmanagedVM') { 403 } else { 502 }))
+        $defaultStatus = if ($errorCode -eq 'NotFound') { 404 } elseif ($errorCode -eq 'InvalidInput') { 400 } elseif ($errorCode -eq 'Conflict') { 409 } elseif ($errorCode -eq 'UnmanagedVM') { 403 } else { 502 }
+        $status = [int](Get-EpicVMProperty -Object $_.Exception -Name 'HttpStatus' -Default $defaultStatus)
         return ConvertTo-EpicVMJsonResponse -StatusCode $status -Body (New-EpicVMApiError -Code $errorCode.ToLowerInvariant() -Message $message)
     }
 }
@@ -823,7 +827,7 @@ function Test-EpicVMMutationRequest {
         [Parameter(Mandatory)] [string] $Path
     )
     if ($Method -eq 'DELETE' -and $Path -match '^/v1/vms/[^/]+$') { return $true }
-    if ($Method -eq 'POST' -and $Path -match '^/v1/host-gaming/(launch|desktop|stop|pair|recover|games|games/remove)$') { return $true }
+    if ($Method -eq 'POST' -and $Path -match '^/v1/host-gaming/(launch|desktop|stop|pair|pair/complete|recover|games|games/remove)$') { return $true }
     if ($Method -eq 'POST' -and ($Path -eq '/v1/provisioning-jobs' -or $Path -eq '/v1/deprovisioning-jobs' -or $Path -match '^/v1/provisioning-jobs/[^/]+/(claim|claim-reissue|guest-recovery|network-recovery|direct-diagnostic|console-credentials|console-complete|console-failed)$')) { return $true }
     if ($Method -eq 'POST' -and ($Path -eq '/v1/vms' -or $Path -match '^/v1/vms/[^/]+/(start|stop|restart|gpu-partition)$' -or $Path -match '^/v1/vms/[^/]+/actions/(start|stop|restart|delete)$')) { return $true }
     return $false

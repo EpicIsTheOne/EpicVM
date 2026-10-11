@@ -1,8 +1,45 @@
 """Shared game management uses the host agent and existing account guards."""
 import hashlib
+import os
 import re
+import json
+import secrets
+import threading
+import time
 from urllib.parse import quote, urlparse
 from flask import jsonify, request, g
+from pathlib import Path
+
+
+def _launch_process_identity(pid):
+    """Identify the worker, including its birth time so reused PIDs are safe."""
+    if os.name != 'nt':
+        try:
+            stat = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+            return Path('/proc/sys/kernel/random/boot_id').read_text().strip() + ':' + stat[19]
+        except (OSError, IndexError):
+            return None
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+        return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+    finally:
+        kernel.CloseHandle(handle)
+try:
+    from .guacamole_orchestrator import ConsoleOrchestrationError
+except ImportError:
+    from guacamole_orchestrator import ConsoleOrchestrationError
 try:
     from .remote_agent_client import RemoteAgentError
 except ImportError:
@@ -10,6 +47,75 @@ except ImportError:
 
 
 def register_shared_games(app, core, guard, data):
+    launch_lock = threading.Lock()
+
+    def launch_jobs_db():
+        core['_init_users_db']()
+        with launch_lock, core['_users_conn']() as conn:
+            conn.execute('''CREATE TABLE IF NOT EXISTS host_launch_jobs (
+                id TEXT PRIMARY KEY, realm TEXT NOT NULL, username TEXT NOT NULL,
+                host_id TEXT NOT NULL, operation TEXT NOT NULL, payload TEXT NOT NULL,
+                state TEXT NOT NULL, result TEXT, created_at REAL NOT NULL)''')
+            columns = {row['name'] for row in conn.execute('PRAGMA table_info(host_launch_jobs)')}
+            for column, kind in [('worker_pid', 'INTEGER'), ('worker_identity', 'TEXT')]:
+                if column not in columns:
+                    conn.execute(f'ALTER TABLE host_launch_jobs ADD COLUMN {column} {kind}')
+            for row in conn.execute("SELECT id, worker_pid, worker_identity FROM host_launch_jobs WHERE state='running'").fetchall():
+                if not row['worker_identity'] or _launch_process_identity(row['worker_pid']) != row['worker_identity']:
+                    result = {'ok': False, 'error': 'The service restarted while preparing your connection. Open or resume your desktop again.'}
+                    conn.execute("UPDATE host_launch_jobs SET state='failed', result=? WHERE id=? AND state='running'",
+                                 (json.dumps(result), row['id']))
+
+    def begin_launch(actor, host_id, path, payload):
+        if data().get('async') is not True:
+            return launch_host_session(actor, host_id, path, payload)
+        launch_jobs_db()
+        encoded = json.dumps(payload, sort_keys=True)
+        with launch_lock, core['_users_conn']() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            existing = conn.execute('''SELECT * FROM host_launch_jobs WHERE realm=? AND username=?
+                AND host_id=? AND state='running' ORDER BY created_at DESC LIMIT 1''',
+                (actor['realm'], actor['username'], host_id)).fetchone()
+            if existing:
+                if existing['operation'] != path or existing['payload'] != encoded:
+                    return jsonify(ok=False, error='Another launch is already running for this desktop.'), 409
+                return jsonify(ok=True, jobId=existing['id'], state='running'), 202
+            job_id = secrets.token_urlsafe(18)
+            conn.execute('''INSERT INTO host_launch_jobs
+                (id,realm,username,host_id,operation,payload,state,created_at,worker_pid,worker_identity)
+                VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                         (job_id, actor['realm'], actor['username'], host_id, path, encoded, 'running', time.time(),
+                          os.getpid(), _launch_process_identity(os.getpid())))
+        def run():
+            with app.app_context():
+                try:
+                    response = app.make_response(launch_host_session(dict(actor), host_id, path, payload))
+                    result = response.get_json() or {'ok': False, 'error': 'No launch response was returned.'}
+                    state = 'ready' if response.status_code < 400 and result.get('launchUrl') else 'failed'
+                except ValueError as exc:
+                    # Match the guarded synchronous API's actionable errors.
+                    state, result = 'failed', {'ok': False, 'error': str(exc)}
+                except Exception:
+                    app.logger.exception('Host launch job failed: %s', job_id)
+                    state, result = 'failed', {'ok': False, 'error': 'Could not prepare the desktop connection. Check status and try again.'}
+                with core['_users_conn']() as conn:
+                    conn.execute('UPDATE host_launch_jobs SET state=?, result=? WHERE id=?',
+                                 (state, json.dumps(result), job_id))
+        threading.Thread(target=run, daemon=True).start()
+        return jsonify(ok=True, jobId=job_id, state='running'), 202
+
+    @app.get('/EpicVM/api/account/host-gaming/launch-jobs/<job_id>')
+    @guard()
+    def launch_status(job_id):
+        actor = g.account_actor
+        launch_jobs_db()
+        with core['_users_conn']() as conn:
+            row = conn.execute('SELECT * FROM host_launch_jobs WHERE id=? AND realm=? AND username=?',
+                               (job_id, actor['realm'], actor['username'])).fetchone()
+        if not row:
+            return jsonify(ok=False, error='Launch not found.'), 404
+        return jsonify(ok=True, state=row['state'], result=json.loads(row['result']) if row['result'] else None)
+
     def stream_name(actor, host_id):
         identity = f"{actor['realm']}:{actor['username']}:{host_id}".lower()
         return 'seat-' + hashlib.sha256(identity.encode()).hexdigest()[:24]
@@ -272,6 +378,10 @@ def register_shared_games(app, core, guard, data):
     @app.get('/EpicVM/api/account/host-gaming')
     @guard()
     def host_gaming_account():
+        try:
+            from .direct_stream import local_stream_origin
+        except ImportError:
+            from direct_stream import local_stream_origin
         actor = g.account_actor
         if actor['accountStatus'] != 'approved':
             return jsonify(ok=False, error='Account approval required.'), 403
@@ -290,11 +400,16 @@ def register_shared_games(app, core, guard, data):
             seat['launchUrl'] = launch_url(record['name'])
         # Only the owner's session status reaches the browser.
         return jsonify(ok=True, available=catalog.get('ready', False), games=games,
-                       desktopAccess=has_desktop_access(actor, host_id), hostId=host_id, seat=seat)
+                       desktopAccess=has_desktop_access(actor, host_id), hostId=host_id, seat=seat,
+                       localConnectionAvailable=bool(local_stream_origin(host_id)))
 
     @app.get('/EpicVM/api/account/host-gaming/desktops')
     @guard()
     def host_gaming_account_desktops():
+        try:
+            from .direct_stream import local_stream_origin
+        except ImportError:
+            from direct_stream import local_stream_origin
         actor = g.account_actor
         if actor['accountStatus'] != 'approved':
             return jsonify(ok=False, error='Account approval required.'), 403
@@ -324,7 +439,8 @@ def register_shared_games(app, core, guard, data):
             owned = [seat for seat in (catalog.get('seats') or [])
                      if str(seat.get('accountName') or '').lower() in account_names]
             desktop = {'hostId': host_id, 'displayName': display_name,
-                       'available': bool(catalog.get('ready', False)), 'seat': None}
+                       'available': bool(catalog.get('ready', False)), 'seat': None,
+                       'localConnectionAvailable': bool(local_stream_origin(host_id))}
             if len(owned) > 1:
                 desktop['errorMessage'] = 'This desktop needs administrator recovery.'
             elif owned:
@@ -365,16 +481,26 @@ def register_shared_games(app, core, guard, data):
                              (name, actor['realm'], actor['username'], host_id, launched['seatId'], port))
             orch.start_staged(name)
             orch.pair_staged(name, pin_submitter=lambda pin: host_gaming(host_id, 'POST', '/pair', {'owner': owner, 'pin': pin}))
+            host_gaming(host_id, 'POST', '/pair/complete', {'owner': owner})
             launched['launchUrl'] = launch_url(name)
             return jsonify(launched)
-        except Exception:
+        except Exception as exc:
+            # Stream cleanup is best effort and must preserve the error that
+            # explains the launch failure to the account portal.
             try:
                 orch.quarantine_staged(name)
-            finally:
+            except Exception as cleanup_error:
+                app.logger.warning('Failed to quarantine stream %s after launch failure: %s', name, cleanup_error)
+            try:
                 streams_db()
                 with core['_users_conn']() as conn:
                     conn.execute('DELETE FROM host_game_streams WHERE name=?', (name,))
-                host_gaming(host_id, 'POST', '/stop', {'owner': owner})
+            except Exception as cleanup_error:
+                app.logger.warning('Failed to remove stream record %s after launch failure: %s', name, cleanup_error)
+            # Keep the Windows seat and its apps for a stream retry.
+
+            if isinstance(exc, ConsoleOrchestrationError):
+                return jsonify(ok=False, error={'code': exc.code, 'message': str(exc)}), exc.status
             raise
 
     @app.post('/EpicVM/api/account/host-gaming/launch')
@@ -386,7 +512,7 @@ def register_shared_games(app, core, guard, data):
         host_id, game_id = str(payload.get('hostId', 'epic-pc')), str(payload.get('gameId', ''))
         if not game_id or (not actor['isAdmin'] and game_id not in allowed_host_games(actor, host_id)):
             raise ValueError('This game is not assigned to your account.')
-        return launch_host_session(actor, host_id, '/launch', {'gameId': game_id})
+        return begin_launch(actor, host_id, '/launch', {'gameId': game_id})
 
     @app.post('/EpicVM/api/account/host-gaming/desktop')
     @guard()
@@ -397,13 +523,19 @@ def register_shared_games(app, core, guard, data):
         host_id = str(payload.get('hostId', 'epic-pc'))
         if not has_desktop_access(actor, host_id):
             raise ValueError('A personal desktop is not assigned to your account.')
-        return launch_host_session(actor, host_id, '/desktop', {})
+        return begin_launch(actor, host_id, '/desktop', {})
 
     @app.post('/EpicVM/api/account/host-gaming/stop')
     @guard()
     def host_gaming_stop():
         actor, payload = g.account_actor, data()
         host_id = str(payload.get('hostId', 'epic-pc'))
+        launch_jobs_db()
+        with core['_users_conn']() as conn:
+            active = conn.execute("SELECT 1 FROM host_launch_jobs WHERE realm=? AND username=? AND host_id=? AND state='running'",
+                                  (actor['realm'], actor['username'], host_id)).fetchone()
+        if active:
+            return jsonify(ok=False, error='Your connection is still being prepared. Wait for it to finish before ending the session.'), 409
         name = stream_name(actor, host_id)
         try:
             stream_orchestrator().quarantine_staged(name)
@@ -474,8 +606,10 @@ def register_shared_games(app, core, guard, data):
             return jsonify(ok=False, error='Account approval required.'), 403
         user = core['_get_user_by_username'](who['username']) if who['realm'] == 'portal' else None
         grants = user.get('assignedResources', []) if user else []
-        resources, _ = core['_resource_inventory'](include_cloudpcs=False)
         allowed = {r['resourceKey'] for r in grants if r.get('resourceType') == 'vm'}
+        if not who['isAdmin'] and not allowed and not (user or {}).get('assignedVms'):
+            return jsonify(ok=True, machines=[])
+        resources, _ = core['_resource_inventory'](include_cloudpcs=False)
         cache, machines = {}, []
         for vm in resources:
             if vm['resourceKey'] not in allowed and not who['isAdmin']:

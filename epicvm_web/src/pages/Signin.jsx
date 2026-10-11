@@ -1,11 +1,13 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { User, Lock, ArrowRight } from '@phosphor-icons/react'
 import { login } from '../api'
 import AuthShell from '../components/AuthShell'
+import { signInDestination } from '../session'
 
 export default function Signin({ setUser }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
@@ -22,7 +24,7 @@ export default function Signin({ setUser }) {
         setUser(u)
         // Already-approved, returning users go straight to the portal.
         if ((u.accountStatus || 'pending') === 'approved') {
-          navigate('/portal')
+          navigate(signInDestination(location.state?.from), { replace: true })
         } else {
           navigate('/pending')
         }
@@ -39,7 +41,8 @@ export default function Signin({ setUser }) {
     <AuthShell title="Sign In">
       <div className="evm-auth-card">
         <h1 className="evm-h1 sm">Sign In</h1>
-        <p className="evm-body">Welcome back. Sign in to check your account status or open the VM Portal.</p>
+        <p className="evm-body">Welcome back. Sign in to open your desktop, play games, or check your access request.</p>
+        {location.state?.expired && <p className="evm-error" role="status">Your sign-in has expired. Sign in again to return to your workspace. This does not end your Windows session.</p>}
         <form onSubmit={submit} className="evm-form">
           <label>Username
             <span className="evm-input"><User size={18} /><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" autoComplete="username" required /></span>

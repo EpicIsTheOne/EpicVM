@@ -12,6 +12,35 @@ from dashboard.guacamole_orchestrator import ConsoleOrchestrationError
 IMAGE = "mrcreativ3001/moonlight-web-stream@sha256:" + "a" * 64
 
 
+def test_consecutive_route_gates_share_fresh_inventory_and_expire(tmp_path, monkeypatch):
+    calls = []
+    clock = [10.0]
+    records = [{"Name": "/blobedash", "State": {"Running": True},
+                "NetworkSettings": {"Networks": {"proxy": {}}},
+                "Config": {"Labels": {"traefik.http.routers.web.tls.certresolver": "myresolver"}}}]
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(stdout="id" if args[1] == 'ps' else json.dumps(records))
+    monkeypatch.setattr(moonlight_module.time, 'monotonic', lambda: clock[0])
+    orch = make_orchestrator(tmp_path, command_runner=run)
+    assert orch._route_available('/vm/new/')
+    assert orch._routing_available()
+    assert orch._route_available('/vm/new/')
+    assert sum(args[1] == 'ps' for args in calls) == 1
+    records[0]['Config']['Labels']['traefik.http.routers.other.rule'] = 'PathPrefix(`/vm/new/`)'
+    clock[0] += 2
+    assert not orch._route_available('/vm/new/')
+    assert sum(args[1] == 'ps' for args in calls) == 2
+
+
+def test_stream_staging_does_not_apply_host_storage_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(moonlight_module.shutil, 'disk_usage',
+                        lambda _: SimpleNamespace(total=100 * 1024**3, used=99 * 1024**3, free=1024**3))
+    orch = make_orchestrator(tmp_path)
+    target = orch.stage_plan(orch.build_plan(name='seat-low-space', guest_ip='100.111.82.1'))
+    assert (target / 'server/config.json').is_file()
+
+
 def test_multiple_consoles_reserve_disjoint_ports_and_keep_them_on_repair(tmp_path):
     orch = make_orchestrator(tmp_path)
     ranges = []
@@ -48,7 +77,6 @@ def make_orchestrator(root, **overrides):
         "root": str(root),
         "digests": {"moonlight": IMAGE},
         "tcp_probe": lambda *_: True,
-        "disk_probe": lambda: True,
         "route_owner_probe": lambda *_: True,
         "routing_probe": lambda: True,
         "auth_status_probe": lambda *_: True,
@@ -70,7 +98,6 @@ def test_shell_quoted_environment_image_is_accepted(tmp_path, monkeypatch):
         tls_resolver="myresolver",
         router_priority=600,
         tcp_probe=lambda *_: True,
-        disk_probe=lambda: True,
         route_owner_probe=lambda *_: True,
         routing_probe=lambda: True,
         auth_status_probe=lambda *_: True,

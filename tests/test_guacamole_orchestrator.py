@@ -19,7 +19,6 @@ def make_orchestrator(root, **overrides):
         "root": str(root),
         "digests": digests(),
         "tcp_probe": lambda *_: True,
-        "disk_probe": lambda: True,
         "route_owner_probe": lambda *_: True,
         "routing_probe": lambda: True,
         "auth_status_probe": lambda *_: True,
@@ -138,11 +137,8 @@ def test_guest_ip_and_digest_gates_are_fail_closed():
         make_orchestrator('.', digests={}).build_compose(name='alpha', guest_ip='100.111.82.1')
 
 
-def test_storage_and_route_collision_gates_prevent_staging(tmp_path):
+def test_route_collision_prevents_staging(tmp_path):
     plan = make_orchestrator(tmp_path).build_plan(name='alpha', guest_ip='100.111.82.1', username='operator', password='transient-password')
-    with pytest.raises(ConsoleOrchestrationError) as storage:
-        make_orchestrator(tmp_path, disk_probe=lambda: False).stage_plan(plan)
-    assert storage.value.code == 'storage_gate'
     with pytest.raises(ConsoleOrchestrationError) as collision:
         make_orchestrator(tmp_path, route_owner_probe=lambda *_: False).stage_plan(plan)
     assert collision.value.code == 'route_collision'

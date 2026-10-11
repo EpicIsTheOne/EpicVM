@@ -99,12 +99,60 @@ function Pair-EpicVMHostGaming($Request) {
         $base = "https://127.0.0.1:$([int]$seats[0].portBase+1)"
         $session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
         Invoke-WebRequest -Uri "$base/api/login" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{username=$auth.username;password=$auth.password}|ConvertTo-Json -Compress) -SkipCertificateCheck -TimeoutSec 10 | Out-Null
-        $response = Invoke-RestMethod -Uri "$base/api/pin" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{pin=$pin;name='EpicVMWeb'}|ConvertTo-Json -Compress) -SkipCertificateCheck -TimeoutSec 20
-        if ($response.status -ne $true) { throw 'Seat rejected the pairing PIN.' }
+        $before = Invoke-RestMethod -Uri "$base/api/clients/list" -WebSession $session -SkipCertificateCheck -TimeoutSec 10
+        $existingIds = @($before.named_certs | ForEach-Object { $_.uuid })
+        # Moonlight emits its PIN before its asynchronous host handshake has
+        # necessarily reached Apollo. Retry only an explicit pending rejection.
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            $response = Invoke-RestMethod -Uri "$base/api/pin" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{pin=$pin;name='EpicVMWeb'}|ConvertTo-Json -Compress) -SkipCertificateCheck -TimeoutSec 5
+            if ($response.status -eq $true) { break }
+            if ($response.status -ne $false) { throw 'Seat returned an invalid pairing response.' }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Seat rejected the pairing PIN.' }
+            Start-Sleep -Milliseconds 250
+        } while ($true)
+        Initialize-EpicVMHostGaming
+        Write-EpicVMGameJson (Join-Path $script:HostGamingRoot ($account + '.pending-pair.json')) @{ids=$existingIds;expires=[DateTime]::UtcNow.AddMinutes(2).ToString('o')}
         return @{ok=$true;paired=$true}
     } finally { $auth.password=$null; $session=$null }
 }
 
+function Complete-EpicVMHostGamingPair($Request) {
+    $account = Get-EpicVMHostGamingAccount ([string]$Request.owner)
+    $pendingPath = Join-Path $script:HostGamingRoot ($account + '.pending-pair.json')
+    if (-not (Test-Path -LiteralPath $pendingPath)) { throw 'No pending stream pairing for this owner.' }
+    $pending = Get-Content -LiteralPath $pendingPath -Raw | ConvertFrom-Json
+    if ([DateTime]$pending.expires -lt [DateTime]::UtcNow) { throw 'Stream pairing expired.' }
+    $existingIds = $pending.ids
+    $view = Get-EpicVMHostGamingView
+    $seats = @($view.seats | Where-Object { $_.accountName -ieq $account -and $_.status -in @('Ready','Streaming') })
+    if ($seats.Count -ne 1) { throw 'The owner has no ready seat.' }
+    $auth = Get-EpicVMApolloAuth ([int]$seats[0].portBase)
+    try {
+        $base = "https://127.0.0.1:$([int]$seats[0].portBase+1)"
+        $session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+        Invoke-WebRequest -Uri "$base/api/login" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{username=$auth.username;password=$auth.password}|ConvertTo-Json -Compress) -SkipCertificateCheck -TimeoutSec 10 | Out-Null
+        # Apollo gives replacement clients view-only rights. Identify only the
+        # client created by this pairing, then grant desktop launch and input.
+        $paired = @()
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $clients = Invoke-RestMethod -Uri "$base/api/clients/list" -WebSession $session -SkipCertificateCheck -TimeoutSec 10
+            $paired = @($clients.named_certs | Where-Object { $_.uuid -notin $existingIds })
+            if ($paired.Count) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($paired.Count -ne 1 -or $paired[0].name -notmatch '^EpicVMWeb( \(\d+\))?$') { throw 'Could not identify the newly paired stream client.' }
+        $client = $paired[0]
+        $updated = Invoke-RestMethod -Uri "$base/api/clients/update" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{
+            uuid=$client.uuid;name=$client.name;perm=0x07001F00
+            display_mode=$client.display_mode;enable_legacy_ordering=$client.enable_legacy_ordering
+            allow_client_commands=$false;always_use_virtual_display=$false
+        } | ConvertTo-Json -Compress) -SkipCertificateCheck -TimeoutSec 10
+        if ($updated.status -ne $true) { throw 'Seat rejected stream launch permissions.' }
+        Remove-Item -LiteralPath $pendingPath -Force
+        return @{ok=$true;paired=$true}
+    } finally { $auth.password=$null; $session=$null }
+}
 function Get-EpicVMHostGamingView {
     $installed = [bool](Get-Service MultiSeatService -ErrorAction SilentlyContinue)
     $service = Get-Service MultiSeatService -ErrorAction SilentlyContinue

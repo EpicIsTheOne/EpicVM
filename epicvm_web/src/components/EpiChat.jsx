@@ -51,7 +51,7 @@ export default function EpiChat(){
   return createPortal(<div className={`epi-shell ${open?'is-open':''}`}>
     {!open && <button className="epi-launch" onClick={()=>setOpen(true)} aria-label="Chat with Epi, your EpicVM helper">
       <span className="epi-launch-art"><EpiMascot /></span>
-      <span className="epi-launch-copy"><strong>Hi, I’m Epi! <Sparkle size={15} weight="fill" /></strong><span>Need a hand with your VM?</span><span className="epi-launch-action">Chat with me <span aria-hidden="true">↗</span></span></span>
+      <span className="epi-launch-copy"><strong>Hi, I’m Epi! <Sparkle size={15} weight="fill" /></strong><span>Need a hand with your desktop?</span><span className="epi-launch-action">Chat with me <span aria-hidden="true">↗</span></span></span>
     </button>}
     {open && <section className="epi-panel" aria-label="Chat with Epi">
       <header><div className="epi-avatar"><EpiMascot small /></div><div><strong>Epi</strong><span>{session?.user?.isAdmin?'Admin agent':'EpicVM helper'} · she/her</span></div><button onClick={loadMemories} title="What Epi remembers"><Brain size={20}/></button><button onClick={()=>setOpen(false)} aria-label="Close Epi"><X size={20}/></button></header>

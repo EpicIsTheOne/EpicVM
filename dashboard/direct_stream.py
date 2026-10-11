@@ -6,6 +6,7 @@ from html import escape
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Response, redirect, request
 
@@ -22,6 +23,22 @@ def configured_streams() -> dict:
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def local_stream_origin(host_id):
+    """Configured per-host HTTPS origin, never a browser-supplied destination."""
+    path = os.environ.get('EPICVM_LOCAL_STREAMS_FILE', '/opt/blobe-vm/private/local-streams.json')
+    try:
+        value = json.loads(Path(path).read_text())[host_id]
+        if not isinstance(value, dict) or not isinstance(value.get('origin'), str):
+            return None
+        origin = value['origin'].rstrip('/') if value.get('enabled') is True else ''
+        parsed = urlsplit(origin)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+            return None
+        return origin
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def register_direct_stream(app, core):
@@ -49,12 +66,24 @@ def register_direct_stream(app, core):
         if not isinstance(record, dict) or record.get("enabled") is not True:
             html = ("<!doctype html><meta charset=utf-8><title>Preparing EpicVM stream</title>"
                     '<meta http-equiv="refresh" content="3">'
-                    '<h1>Preparing your stream</h1><p>Your game is starting. This page will reconnect automatically.</p>')
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    '<main><h1>Preparing your stream</h1>'
+                    '<p>Your desktop connection is getting ready. This page checks again automatically.</p>'
+                    '<p>Taking longer than expected? Return to your workspace to check status and open or resume your desktop again.</p>'
+                    '<p><a href="/EpicVM/portal">Back to workspace</a></p>'
+                    '<p>Returning to your workspace leaves your Windows apps running.</p></main>')
             response = Response(html, status=503, mimetype="text/html")
             response.headers["Cache-Control"] = "no-store"
             return response
         base = str(record.get("hostUrl") or "").rstrip("/")
         path = str(record.get("streamPath") or "")
+        local = request.args.get('connection') == 'local'
+        if local:
+            base = local_stream_origin(host_id)
+            if not base:
+                return Response('<main><h1>Local connection is not available</h1><p>Your Windows apps stay running.</p>'
+                                f'<a href="{escape(request.path, quote=True)}">Use normal connection</a></main>', 503, mimetype='text/html', headers={'Cache-Control': 'no-store'})
+            path += ('&' if '?' in path else '?') + 'connection=local&route=' + route
         if not base.startswith("https://") or not path.startswith(f"/EpicVM/{route}/"):
             return Response("Stream configuration unavailable", 503)
         key_path = os.environ.get("EPICVM_DIRECT_STREAM_KEY_FILE", "/opt/blobe-vm/private/direct-stream.key")
@@ -71,10 +100,21 @@ def register_direct_stream(app, core):
                 "<meta name=referrer content=no-referrer>"
                 f'<form method="post" action="{action}">'
                 f'<input type="hidden" name="grant" value="{escape(grant, quote=True)}">'
-                '<button type="submit">Open stream</button></form>'
-                '<script>document.forms[0].submit()</script>')
+                '<button type="submit">Open stream</button></form>')
+        if local:
+            fallback = escape(request.path, quote=True)
+            probe = json.dumps(base + '/EpicVM/local-health')
+            html += (f'<main><h1>Opening over your local network</h1><p id="status" role="status">Checking the host. Your browser may ask for local network access.</p>'
+                     f'<p><a href="{fallback}">Use normal connection</a></p><p>Both options use the same desktop and leave your Windows apps running.</p></main>'
+                     '<script>const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),5000);'
+                     f'fetch({probe},{{mode:"cors",credentials:"omit",signal:controller.signal}})'
+                     '.then(r=>{if(!r.ok)throw new Error();document.forms[0].submit()})'
+                     '.catch(()=>{document.getElementById("status").textContent="We could not reach the host locally. Check that you are on its network and allow local network access. If the local hostname cannot be found, enable Secure DNS with Cloudflare or Google in your browser, or ask the host to allow it in the router DNS settings. You can also use the normal connection below."})'
+                     '.finally(()=>clearTimeout(timeout));</script>')
+        else:
+            html += '<script>document.forms[0].submit()</script>'
         response = Response(html, mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = f"default-src 'none'; script-src 'unsafe-inline'; form-action {base}; base-uri 'none'"
+        response.headers["Content-Security-Policy"] = f"default-src 'none'; script-src 'unsafe-inline'; connect-src {base}; form-action {base}; base-uri 'none'"
         return response

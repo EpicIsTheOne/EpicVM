@@ -49,7 +49,7 @@ export default function Signup({ setUser }) {
     <AuthShell title="Request Access">
       <div className="evm-auth-card">
         <h1 className="evm-h1 sm">Request Access</h1>
-        <p className="evm-body">Create an account. We'll review your request and provision your machine after approval.</p>
+        <p className="evm-body">Create an account and request access. After approval, Epic can assign a desktop, games, or a VM to your workspace.</p>
         <form onSubmit={submit} className="evm-form">
           <label>Username
             <span className="evm-input"><User size={18} /><input value={form.username} onChange={set('username')} placeholder="3-64 chars: letters, numbers, . _ -" autoComplete="username" required /></span>

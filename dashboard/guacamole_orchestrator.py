@@ -15,7 +15,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import socket
 import subprocess
 import time
@@ -121,7 +120,6 @@ class GuacamoleOrchestrator:
         router_priority: int | str | None = None,
         digests: Mapping[str, str] | None = None,
         tcp_probe: Callable[[str, int, float], bool] | None = None,
-        disk_probe: Callable[[], bool] | None = None,
         route_owner_probe: Callable[[str], bool] | None = None,
         routing_probe: Callable[[], bool] | None = None,
         auth_status_probe: Callable[[str], bool] | None = None,
@@ -136,7 +134,6 @@ class GuacamoleOrchestrator:
         self.router_priority = str(router_priority or os.environ.get("EPICVM_TRAEFIK_ROUTER_PRIORITY", "")).strip()
         self.digests = dict(digests or {})
         self.tcp_probe = tcp_probe or self._tcp_probe
-        self.disk_probe = disk_probe or self._disk_ready
         self.route_owner_probe = route_owner_probe or self._route_available
         self.routing_probe = routing_probe or self._routing_available
         self.auth_status_probe = auth_status_probe or self._public_auth_rejected
@@ -218,14 +215,6 @@ class GuacamoleOrchestrator:
         if priority < 1 or priority > 100000:
             raise ConsoleOrchestrationError("The Traefik router priority is invalid.", status=503, code="routing_config_invalid")
         return self.public_host, self.tls_resolver, priority
-
-    def _disk_ready(self) -> bool:
-        candidate = self.root
-        while not candidate.exists() and candidate != candidate.parent:
-            candidate = candidate.parent
-        usage = shutil.disk_usage(candidate)
-        used_percent = ((usage.total - usage.free) / usage.total * 100) if usage.total else 100
-        return usage.free >= 20 * 1024**3 and used_percent < 85
 
     def _route_available(self, route_prefix: str) -> bool:
         try:
@@ -497,8 +486,6 @@ COMMIT;
         target = self._instance_root(plan.name)
         if target.exists():
             raise ConsoleOrchestrationError("A console instance with this name already exists.", status=409, code="console_exists")
-        if not self.disk_probe():
-            raise ConsoleOrchestrationError("kvm2 storage is below the provisioning safety threshold.", status=507, code="storage_gate")
         if not self.routing_probe():
             raise ConsoleOrchestrationError("The verified Traefik authentication or TLS route is unavailable.", status=503, code="routing_probe_failed")
         if not self.route_owner_probe(plan.route_prefix):

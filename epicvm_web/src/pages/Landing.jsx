@@ -22,7 +22,7 @@ function Nav({ authed, onSignout }) {
       <nav className="evm-nav-links">
         <a href="#features" onClick={jump('features')}>Features</a>
         <a href="#how" onClick={jump('how')}>How It Works</a>
-        <a href="#vm-types" onClick={jump('vm-types')}>VM Types</a>
+        <a href="#vm-types" onClick={jump('vm-types')}>Access options</a>
         <a href="#faq" onClick={jump('faq')}>FAQ</a>
       </nav>
       <div className="evm-nav-actions">
@@ -46,14 +46,15 @@ function Nav({ authed, onSignout }) {
 const STEPS = [
   { n: 1, title: 'Create an account', body: 'Request access to EpicVM.' },
   { n: 2, title: 'Get approved', body: 'Accounts are manually reviewed before gaining access.' },
-  { n: 3, title: 'Your machine is created', body: 'EpicVM automatically provisions your cloud computer.' },
-  { n: 4, title: 'Open the VM Portal', body: 'Manage and connect to your machine.' },
+  { n: 3, title: 'Get desktop access', body: 'Epic assigns a Windows desktop, games, or a VM to your account.' },
+  { n: 4, title: 'Open your desktop', body: 'Sign in, choose Open desktop, and connect in your browser. Resume it when you return.' },
 ]
 
 const VM_TYPES = [
+  { icon: WindowsLogo, label: 'Hosted desktops', tag: 'windows', title: 'Windows desktop', body: 'A personal Windows session on our shared host, with your own account and files. Use apps and play assigned games in your browser.' },
   {
-    icon: LinuxLogo, label: 'Beta Default', tag: 'linux', title: 'Linux VM',
-    body: 'A personal Linux environment for coding, hosting projects, automation, experimentation, servers, and development. Most approved beta users receive a Linux VM.',
+    icon: LinuxLogo, label: 'By request', tag: 'linux', title: 'Linux VM',
+    body: 'A personal Linux environment for coding, hosting projects, automation, experimentation, servers, and development. VMs are available by request and assigned separately from hosted desktops.',
   },
   {
     icon: WindowsLogo, label: 'Limited Beta', tag: 'windows', title: 'Windows VM',
@@ -66,9 +67,9 @@ const VM_TYPES = [
 ]
 
 const FEATURES = [
-  { icon: Desktop, title: 'Your Own Machine', body: 'A personal VM rather than a shared environment.' },
+  { icon: Desktop, title: 'Your Own Workspace', body: 'Your own Windows account and files on a hosted desktop, or a separately assigned VM.' },
   { icon: WifiHigh, title: 'Access Anywhere', body: 'Connect remotely from supported devices.' },
-  { icon: Lightning, title: 'Automatic Provisioning', body: 'Once approved, EpicVM can create your machine automatically.' },
+  { icon: Lightning, title: 'Easy to Open', body: 'Your assigned desktops and games appear after you sign in.' },
   { icon: Cpu, title: 'Linux + Windows', body: 'Different machine types for different workflows.' },
   { icon: GameController, title: 'GPU Acceleration', body: 'Available on selected experimental Gaming VMs.' },
   { icon: Rocket, title: 'Built for Experimentation', body: 'Development, hosting, automation, learning, gaming, and personal projects.' },
@@ -76,8 +77,8 @@ const FEATURES = [
 
 const FAQ = [
   { q: 'Is EpicVM free?', a: 'Yes, during the current beta.' },
-  { q: 'What computer will I get?', a: 'Most approved users currently receive a Linux VM.' },
-  { q: 'Can I get Windows?', a: 'Windows VMs are currently limited to selected beta testers.' },
+  { q: 'What can I use?', a: 'Your workspace shows the Windows desktops, games, and VMs Epic has assigned to your account. Access depends on available host capacity.' },
+  { q: 'How do I return to my desktop?', a: 'Sign in and choose Resume desktop. Closing the stream tab leaves your apps running. End session closes apps and signs you out of Windows, so save your work first.' },
   { q: 'Can I get a Gaming VM?', a: 'Gaming VMs are experimental and currently available only to selected testers.' },
   { q: 'Can I store important files on EpicVM?', a: 'During beta, keep backups of important data elsewhere. Do not treat EpicVM as the only copy of critical files.' },
   { q: 'Who can join?', a: 'EpicVM is a beta. Accounts must be approved before gaining access.' },
@@ -114,7 +115,7 @@ export default function Landing({ authed, onSignout }) {
             <span className="evm-pill">BETA</span>
             <h1 className="evm-h1">Your PC.<br />Anywhere.</h1>
             <p className="evm-lead">
-              EpicVM gives you your own cloud computer that you can access from almost anywhere.
+              Open your hosted Windows desktop and play assigned games from your browser. Sign in, connect, and resume when you return.
             </p>
             <div className="evm-hero-cta">
               <button className="evm-btn evm-btn-primary evm-btn-lg" onClick={() => go('/signup')}>Request Access</button>
@@ -126,12 +127,12 @@ export default function Landing({ authed, onSignout }) {
               <div className="evm-window-bar"><i /><i /><i /></div>
               <div className="evm-window-body">
                 <div className="evm-vm-card">
-                  <span className="evm-vm-os"><LinuxLogo size={18} /> Linux VM</span>
+                  <span className="evm-vm-os"><WindowsLogo size={18} /> Personal desktop</span>
                   <span className="evm-vm-state live">Ready</span>
                   <div className="evm-vm-row"><span>CPU</span><div className="evm-bar"><i style={{ width: '34%' }} /></div></div>
                   <div className="evm-vm-row"><span>RAM</span><div className="evm-bar"><i style={{ width: '52%' }} /></div></div>
-                  <div className="evm-vm-meta">2 vCPU · 4 GB · 40 GB</div>
-                  <button className="evm-btn evm-btn-primary evm-btn-sm">Connect</button>
+                  <div className="evm-vm-meta">Windows · Your account and files</div>
+                  <button className="evm-btn evm-btn-primary evm-btn-sm">Open desktop</button>
                 </div>
               </div>
             </div>
@@ -143,9 +144,9 @@ export default function Landing({ authed, onSignout }) {
       <section className="evm-section">
         <h2 className="evm-h2">What is EpicVM?</h2>
         <p className="evm-body">
-          EpicVM gives approved users their own virtual computer hosted in the cloud. Once approved,
-          EpicVM creates your machine and gives you access through the VM Portal. It is closer to having
-          your own remote computer than using a shared coding environment.
+          EpicVM gives approved friends access to hosted Windows desktops and games. Your desktop uses
+          your own Windows account and files on a shared host. Open it from your workspace in the browser.
+          Linux and Windows VMs are also available when separately assigned.
         </p>
       </section>
 
@@ -165,7 +166,7 @@ export default function Landing({ authed, onSignout }) {
 
       {/* VM types */}
       <section className="evm-section" id="vm-types">
-        <h2 className="evm-h2">VM Types</h2>
+        <h2 className="evm-h2">Access options</h2>
         <div className="evm-types">
           {VM_TYPES.map((t) => (
             <div className={`evm-type evm-type-${t.tag}`} key={t.title}>
@@ -197,11 +198,11 @@ export default function Landing({ authed, onSignout }) {
         <p className="evm-body">
           EpicVM is still being developed and tested. Access is limited while reliability, performance,
           capacity, and provisioning are improved. Signing up does not guarantee approval or access to a
-          particular VM type.
+          particular desktop, game, or VM.
         </p>
         <ul className="evm-checklist">
-          <li>approved users generally receive Linux VMs</li>
-          <li>Windows availability is limited</li>
+          <li>desktops and games are assigned to approved accounts</li>
+          <li>host capacity and availability are limited</li>
           <li>Gaming VMs are experimental</li>
           <li>the service is currently free</li>
         </ul>
@@ -216,8 +217,8 @@ export default function Landing({ authed, onSignout }) {
       <section className="evm-section evm-free">
         <h2 className="evm-h2">Free during beta</h2>
         <p className="evm-body">
-          There is currently no charge to use EpicVM during the beta. Windows and Gaming VM
-          availability is limited and assigned manually.
+          There is currently no charge to use EpicVM during the beta. Desktop, game, and VM
+          access is limited and assigned by Epic.
         </p>
       </section>
 

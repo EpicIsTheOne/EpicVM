@@ -2,10 +2,169 @@ from types import SimpleNamespace
 import hashlib
 import json
 import re
+import pytest
 
 from dashboard.direct_stream_auth import verify_grant
 
 from test_account_workspace import workspace, login, post
+
+
+def test_admin_desktop_fallback_exposes_local_connection(workspace, monkeypatch, tmp_path):
+    settings = tmp_path / 'local-streams.json'
+    settings.write_text(json.dumps({'epic-pc': {'enabled': True, 'origin': 'https://lan.example.com:8443'}}))
+    monkeypatch.setenv('EPICVM_LOCAL_STREAMS_FILE', str(settings))
+    monkeypatch.setattr(workspace, '_vm_host', lambda _: SimpleNamespace(client=SimpleNamespace(
+        _request=lambda *args, **kwargs: {'ok': True, 'ready': True, 'games': [], 'seats': []})))
+    client = login(workspace, 'rootadmin', dashboard=True)
+    assert client.get('/EpicVM/api/account/host-gaming/desktops').json['desktops'] == []
+    fallback = client.get('/EpicVM/api/account/host-gaming').json
+    assert fallback['desktopAccess'] is True
+    assert fallback['localConnectionAvailable'] is True
+    settings.write_text('{}')
+    assert client.get('/EpicVM/api/account/host-gaming').json['localConnectionAvailable'] is False
+
+
+def test_desktop_only_polling_does_not_scan_vm_providers(workspace, monkeypatch):
+    client = login(workspace)
+    monkeypatch.setattr(workspace, '_resource_inventory', lambda **kw: (_ for _ in ()).throw(AssertionError('VM scan')))
+    assert client.get('/portal/api/vms').json['vms'] == []
+    assert client.get('/EpicVM/api/account/games').json['machines'] == []
+
+
+def test_interrupted_launch_is_failed_without_touching_live_workers(workspace):
+    import os
+    import time
+    from dashboard.shared_games import _launch_process_identity
+    client = login(workspace)
+    assert client.get('/EpicVM/api/account/host-gaming/launch-jobs/missing').status_code == 404
+    with workspace._users_conn() as conn:
+        for job, identity in [('dead', 'different-process-birth'), ('alive', _launch_process_identity(os.getpid()))]:
+            conn.execute('''INSERT INTO host_launch_jobs
+                (id,realm,username,host_id,operation,payload,state,created_at,worker_pid,worker_identity)
+                VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                (job, 'portal', 'alice', 'epic-pc', '/desktop', '{}', 'running', time.time(), os.getpid(), identity))
+    dead = client.get('/EpicVM/api/account/host-gaming/launch-jobs/dead').json
+    assert dead['state'] == 'failed'
+    assert 'restarted' in dead['result']['error']
+    assert client.get('/EpicVM/api/account/host-gaming/launch-jobs/alive').json['state'] == 'running'
+
+
+def test_async_launch_deduplicates_and_binds_status_to_owner(workspace, monkeypatch):
+    import threading
+    import time
+    release, entered = threading.Event(), threading.Event()
+    calls = []
+    def agent(method, path, payload=None, **kwargs):
+        if path == '/v1/host-gaming/desktop':
+            calls.append(payload['owner']); entered.set()
+            assert release.wait(5)
+            return {'ok': True, 'seatId': 'one', 'portBase': 48100}
+        return {'ok': True, 'apiVersion': 3, 'ready': True, 'games': [], 'seats': []}
+    class Stream:
+        def quarantine_staged(self, name): pass
+        def build_plan(self, **kwargs): return kwargs
+        def stage_plan(self, plan): pass
+        def start_staged(self, name): pass
+        def pair_staged(self, name, *, pin_submitter): pin_submitter('1234')
+    monkeypatch.setattr(workspace, '_console_orchestrator', lambda: Stream())
+    monkeypatch.setattr(workspace, '_vm_host', lambda _: SimpleNamespace(client=SimpleNamespace(
+        _request=agent, base_url='http://100.72.220.117:8765/')))
+    monkeypatch.setattr(workspace.VM_HOST_REGISTRY, 'public_records', lambda: [{'id': 'epic-pc', 'platform': 'windows'}])
+    admin = login(workspace, 'rootadmin', dashboard=True)
+    assert post(admin, 'management/host-gaming/desktop-grants', username='alice').status_code == 200
+    alice, bob = login(workspace), login(workspace, 'bob')
+    try:
+        response = post(alice, 'account/host-gaming/desktop', **{'async': True})
+        assert response.status_code == 202
+        assert entered.wait(2)
+        job = response.json['jobId']
+        assert post(alice, 'account/host-gaming/desktop', **{'async': True}).json['jobId'] == job
+        url = '/EpicVM/api/account/host-gaming/launch-jobs/' + job
+        assert bob.get(url).status_code == 404
+        assert alice.get(url).json['state'] == 'running'
+        assert post(alice, 'account/host-gaming/stop').status_code == 409
+    finally:
+        release.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        result = alice.get(url).json
+        if result['state'] != 'running': break
+        time.sleep(.05)
+    assert result['state'] == 'ready', result
+    assert result['result']['launchUrl'].startswith('/EpicVM/stream-launch/')
+    assert calls == ['portal:alice']
+
+
+@pytest.mark.parametrize('asynchronous', [False, True])
+def test_stream_failure_preserves_owner_seat_and_retry_reuses_it(workspace, monkeypatch, asynchronous):
+    calls, created = [], []
+    seats = {}
+
+    def agent(method, path, payload=None, **kwargs):
+        calls.append((method, path, payload))
+        if path == '/v1/host-gaming':
+            return {'ok': True, 'apiVersion': 3, 'ready': True, 'games': [], 'seats': list(seats.values())}
+        if path == '/v1/host-gaming/desktop':
+            owner = payload['owner']
+            if owner not in seats:
+                created.append(owner)
+                seats[owner] = {'id': 'retained-seat', 'accountName': 'EpicVM_alice',
+                                'status': 'Ready', 'portBase': 48100}
+            return {'ok': True, 'seatId': seats[owner]['id'], 'portBase': 48100}
+        if path == '/v1/host-gaming/stop':
+            seats.pop(payload['owner'], None)
+        return {'ok': True}
+
+    class Stream:
+        fail_pairing = True
+        def quarantine_staged(self, name): pass
+        def build_plan(self, **kwargs): return kwargs
+        def stage_plan(self, plan): pass
+        def start_staged(self, name): pass
+        def pair_staged(self, name, *, pin_submitter):
+            if self.fail_pairing:
+                raise ValueError('Temporary pairing failure')
+            pin_submitter('1234')
+        def _runtime_isolated(self, name): return False
+        def verify_staged(self, name, **kwargs): pass
+
+    stream = Stream()
+    monkeypatch.setattr(workspace, '_console_orchestrator', lambda: stream)
+    monkeypatch.setattr(workspace, '_vm_host', lambda _: SimpleNamespace(client=SimpleNamespace(
+        _request=agent, base_url='http://100.72.220.117:8765/')))
+    monkeypatch.setattr(workspace.VM_HOST_REGISTRY, 'public_records',
+                        lambda: [{'id': 'epic-pc', 'platform': 'windows'}])
+    admin = login(workspace, 'rootadmin', dashboard=True)
+    assert post(admin, 'management/host-gaming/desktop-grants', username='alice').status_code == 200
+    alice, bob = login(workspace), login(workspace, 'bob')
+    def launch():
+        response = post(alice, 'account/host-gaming/desktop', **{'async': asynchronous})
+        if not asynchronous:
+            return response.status_code, response.json
+        import time
+        assert response.status_code == 202
+        url = '/EpicVM/api/account/host-gaming/launch-jobs/' + response.json['jobId']
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            job = alice.get(url).json
+            if job['state'] != 'running':
+                return (200 if job['state'] == 'ready' else 400), job['result']
+            time.sleep(.02)
+        pytest.fail('Launch job did not finish')
+    failed_status, failed = launch()
+    assert failed_status == 400
+    assert seats['portal:alice']['id'] == 'retained-seat'
+    assert not any(path == '/v1/host-gaming/stop' for _, path, _ in calls)
+    assert 'launchUrl' not in alice.get('/EpicVM/api/account/host-gaming').json['seat']
+
+    stream.fail_pairing = False
+    resumed_status, resumed = launch()
+    assert resumed_status == 200, resumed
+    assert created == ['portal:alice']
+    assert resumed['seatId'] == 'retained-seat'
+    assert bob.get(resumed['launchUrl']).status_code == 403
+    assert post(alice, 'account/host-gaming/stop').status_code == 200
+    assert not seats
 
 
 def test_host_game_grant_controls_native_launch(workspace, monkeypatch, tmp_path):
