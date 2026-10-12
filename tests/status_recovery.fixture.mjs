@@ -3,7 +3,7 @@ import http from 'node:http'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-const build = path.resolve(process.env.EPICVM_BUILD_OUT || 'status-build-20261010')
+const build = path.resolve(process.env.EPICVM_BUILD_OUT || 'epicvm_web/dist')
 let scenario = {}, activeChecks = 0, maxChecks = 0, launches = 0, stops = 0, authChecks = 0
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)) }
 const user = { username: 'status_friend', accountStatus: 'approved' }

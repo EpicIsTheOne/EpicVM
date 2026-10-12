@@ -1,6 +1,6 @@
 # EpicVM
 
-EpicVM is a VM platform for creating, running, routing, and maintaining isolated desktop VMs through Docker and a focused web dashboard. It is derived from the DesktopOnCodespaces project and remains focused on VM operations.
+EpicVM hosts Windows desktops, games and apps through a web portal. Its multiseat mode gives friends separate Windows sessions on one host PC, with normal or local-network streaming and a native Windows Agent for host management. EpicVM also retains its Docker VM and Hyper-V workflows. It grew from DesktopOnCodespaces and preserves the upstream attribution and GPLv3 license.
 
 > **License and attribution:** EpicVM is distributed under the GNU General Public License, version 3 (GPLv3). Keep the upstream DesktopOnCodespaces attribution and the repository `LICENSE` when copying or redistributing this modified work.
 
@@ -10,7 +10,20 @@ The independent EpicVM repository is hosted at <https://github.com/EpicIsTheOne/
 
 Thank you to [Blobby-Boi](https://github.com/Blobby-Boi/), the original owner and creator of the project EpicVM grew from. EpicVM has since been substantially expanded while preserving the project's open-source licensing and upstream attribution.
 
-## Quick start
+## Windows multiseat hosting (preview)
+
+The current focus is a self-hosted portal with independent Windows desktop sessions. A host can run its portal on the same Windows PC or on a separate Linux server. Multiseat hosting does not require Hyper-V.
+
+- The Windows Agent manages hosting, sessions, games, connection permissions, updates and diagnostics. Hosting services start with Windows, independently of the Agent UI and operator login.
+- The portal provides assigned desktops, account/request status, notifications and reconnectable sessions. Administrators can assign existing local Windows accounts; connecting to those accounts requires their Windows password.
+- Optional LAN acceleration uses a fully local HTTPS address, with a one-time certificate trust step on each client. The portal and Agent show the certificate fingerprint. Existing domain-backed LAN gateways remain supported.
+- Fresh setup offers a dedicated data folder on a fixed NTFS drive, host approval and a recorded video/input check before activation for friends. Existing accounts, profiles and installations are preserved.
+
+Start with [Fresh host setup](docs/FRESH-HOST-SETUP.md). It explains the complete preview package, same-PC and separate-server installation, networking, certificate trust and recovery. Building from source is documented in [Windows Host Agent](docs/WINDOWS-HOST-AGENT.md); component provenance and release obligations are in [Third-party host components](docs/THIRD-PARTY-HOST-COMPONENTS.md).
+
+This is a preview, not a finished public installer. Clean-machine/cold-boot validation, a complete separate-server/external-network stream, certificate renewal and trusted signing/publishing remain release gates. Gamepad support is not fully tested; vibration is unverified. See the [latest LAN/storage verification](docs/verification/lan-storage-20261012.md) for tested behavior and limits.
+
+## VM quick start
 
 ### Codespaces
 
@@ -103,4 +116,4 @@ Use the EpicVM names for new scripts and documentation, but do not rename these 
 
 ## Scope
 
-EpicVM documents VM lifecycle, routing, container resources, dashboard presentation, and VM application maintenance.
+EpicVM covers Windows multiseat desktop hosting, browser streaming, host management and self-hosted onboarding, alongside its existing VM lifecycle, routing and application-maintenance workflows.

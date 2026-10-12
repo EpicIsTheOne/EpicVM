@@ -140,6 +140,80 @@ def test_reports_reply_and_overview(workspace):
     assert len(result.json['tickets']) == 1
 
 
+def test_connection_report_preview_fields_are_private_and_owner_scoped(workspace):
+    alice, bob, admin = login(workspace), login(workspace, 'bob'), login(workspace, 'manager')
+    context = {'host': 'epic-pc', 'connection': 'local', 'source': 'launch', 'stage': 'pairing',
+               'time': '2026-10-12T03:00:00.000Z', 'password': 'NEVER-STORE',
+               'grant': 'NEVER-STORE', 'url': 'https://private/?token=NEVER-STORE'}
+    result = post(alice, 'account/tickets', kind='bug', title='Connection failed', body='The desktop did not open.',
+                  requestKey='context-test', context=context)
+    assert result.status_code == 201
+    report = alice.get('/EpicVM/api/account/tickets').json['tickets'][0]
+    assert report['context'] == {key: context[key] for key in ('host', 'connection', 'source', 'stage', 'time')}
+    assert bob.get('/EpicVM/api/account/tickets').json['tickets'] == []
+    assert admin.get('/EpicVM/api/management/overview').json['tickets'][0]['context'] == report['context']
+    with workspace._users_conn() as conn:
+        assert 'NEVER-STORE' not in conn.execute('SELECT context FROM account_tickets').fetchone()[0]
+    assert post(alice, 'account/tickets', kind='bug', title='No preview', body='Details omitted.',
+                requestKey='no-context', context=None).status_code == 201
+    assert alice.get('/EpicVM/api/account/tickets').json['tickets'][0]['context'] in ({}, report['context'])
+
+
+def test_desktop_access_request_is_reviewed_without_creating_a_vm(workspace, monkeypatch):
+    alice, admin = login(workspace), login(workspace, 'manager')
+    monkeypatch.setattr(workspace, '_resource_inventory', lambda **kw: (_ for _ in ()).throw(AssertionError('VM creation or assignment')))
+    result = post(alice, 'account/tickets', kind='desktop', title='Desktop access', body='I would like to use the host desktop.', requestKey='desktop-request')
+    assert result.status_code == 201
+    path = 'management/tickets/' + result.json['id']
+    assert post(admin, path, status='fulfilled', response='Wrong VM workflow').status_code == 400
+    assert post(admin, path, status='in_review', response='Checking access').status_code == 200
+    assert post(admin, path, status='resolved', response='Your desktop access is ready').status_code == 400
+    with workspace._users_conn() as conn:
+        conn.execute('INSERT INTO host_desktop_grants VALUES (?,?,?)', ('portal', 'alice', 'epic-pc'))
+    assert post(admin, path, status='resolved', response='Your desktop access is ready').status_code == 200
+    assert alice.get('/EpicVM/api/account/tickets').json['tickets'][0]['kind'] == 'desktop'
+
+
+def test_desktop_ready_requires_the_requesters_enabled_approved_account(workspace):
+    alice, admin = login(workspace), login(workspace, 'manager')
+    result = post(alice, 'account/tickets', kind='desktop', title='Access', body='Please assign a desktop', requestKey='ready-check')
+    path = 'management/tickets/' + result.json['id']
+    with workspace._users_conn() as conn:
+        conn.execute('INSERT INTO host_desktop_grants VALUES (?,?,?)', ('portal', 'bob', 'epic-pc'))
+    assert post(admin, path, status='resolved', response='Ready').status_code == 400
+    with workspace._users_conn() as conn:
+        conn.execute('INSERT INTO host_desktop_grants VALUES (?,?,?)', ('portal', 'alice', 'epic-pc'))
+    workspace._update_user('alice', disabled=True)
+    assert post(admin, path, status='resolved', response='Ready').status_code == 400
+    workspace._update_user('alice', disabled=False, account_status='pending')
+    assert post(admin, path, status='resolved', response='Ready').status_code == 400
+    workspace._update_user('alice', account_status='approved')
+    assert post(admin, path, status='resolved', response='Ready').status_code == 200
+    report = login(workspace).get('/EpicVM/api/account/tickets').json['tickets'][0]
+    assert report['desktopAssigned'] is True
+    with workspace._users_conn() as conn:
+        conn.execute("DELETE FROM host_desktop_grants WHERE username='alice'")
+    assert login(workspace).get('/EpicVM/api/account/tickets').json['tickets'][0]['desktopAssigned'] is False
+
+
+def test_only_one_open_desktop_request_per_owner(workspace):
+    alice, bob = login(workspace), login(workspace, 'bob')
+    first = post(alice, 'account/tickets', kind='desktop', title='Access', body='Please assign a desktop', requestKey='one')
+    repeated = post(alice, 'account/tickets', kind='desktop', title='Again', body='Please assign a desktop', requestKey='two')
+    assert repeated.json['id'] == first.json['id']
+    assert len(alice.get('/EpicVM/api/account/tickets').json['tickets']) == 1
+    assert post(bob, 'account/tickets', kind='desktop', title='My access', body='Please assign a desktop', requestKey='one').json['id'] != first.json['id']
+
+
+def test_report_context_rejects_oversize_and_discards_invalid_fields(workspace):
+    alice = login(workspace)
+    for context in ['invalid', {'host': 'x' * 3000}]:
+        assert post(alice, 'account/tickets', kind='bug', title='Bug', body='Detailed report', requestKey='bad', context=context).status_code == 400
+    assert post(alice, 'account/tickets', kind='bug', title='Bug', body='Detailed report', requestKey='invalid-fields',
+                context={'host': 'https://private/token', 'connection': 'secret', 'stage': '<script>', 'time': '2026-99-99T00:00:00Z'}).status_code == 201
+    assert alice.get('/EpicVM/api/account/tickets').json['tickets'][0]['context'] == {}
+
+
 def test_management_provisioning_is_admin_only_and_forces_automatic(workspace, monkeypatch):
     member, admin = login(workspace), login(workspace, 'manager')
     assert member.get('/EpicVM/api/management/provisioning').status_code == 403
@@ -211,3 +285,42 @@ def test_management_retry_uses_protected_defaults_without_returning_them(workspa
     assert result.status_code == 200
     assert seen == [('job-1', {'host_id': 'epic-pc', 'username': 'protected-user', 'password': 'protected-password'})]
     assert 'protected' not in result.get_data(as_text=True)
+
+
+def test_notification_read_state_is_private_and_shared_between_sessions(workspace):
+    alice, second, bob, manager = login(workspace), login(workspace), login(workspace, 'bob'), login(workspace, 'manager')
+    assert workspace.app.test_client().get('/EpicVM/api/account/notifications').status_code == 401
+    tid = ticket(alice, kind='bug')
+    incoming = manager.get('/EpicVM/api/account/notifications').json
+    admin_item = next(i for i in incoming['notifications'] if i['target'].endswith(tid))
+    assert admin_item['category'] == 'reports' and not admin_item['read']
+    assert post(alice, 'account/notifications/read', ids=[admin_item['id']]).status_code == 404
+    assert post(manager, 'management/tickets/' + tid, status='in_review', response='Looking into this.').status_code == 200
+    item = next(i for i in alice.get('/EpicVM/api/account/notifications').json['notifications'] if i['category'] == 'reply')
+    assert not item['read']
+    assert bob.get('/EpicVM/api/account/notifications').json['notifications'] != alice.get('/EpicVM/api/account/notifications').json['notifications']
+    assert post(bob, 'account/notifications/read', ids=[item['id']]).status_code == 404
+    assert alice.post('/EpicVM/api/account/notifications/read', json={'ids': [item['id']]}).status_code == 403
+    assert post(alice, 'account/notifications/read', ids=[item['id']]).status_code == 200
+    assert next(i for i in second.get('/EpicVM/api/account/notifications').json['notifications'] if i['id'] == item['id'])['read']
+    assert post(manager, 'management/tickets/' + tid, status='resolved', response='Fixed now.').status_code == 200
+    updated = next(i for i in second.get('/EpicVM/api/account/notifications').json['notifications'] if i['category'] == 'reply')
+    assert updated['id'] != item['id'] and not updated['read']
+    assert post(alice, 'account/notifications/read', ids=[item['id']]).status_code == 404
+
+
+def test_notifications_show_approval_assignments_and_pending_accounts(workspace):
+    alice, manager = login(workspace), login(workspace, 'manager')
+    workspace._update_user('bob', account_status='pending')
+    assert any(i['category'] == 'accounts' and 'bob' in i['title'] for i in manager.get('/EpicVM/api/account/notifications').json['notifications'])
+    with workspace._users_conn() as conn:
+        conn.execute("INSERT INTO host_desktop_grants VALUES ('portal','alice','epic-pc')")
+    items = alice.get('/EpicVM/api/account/notifications').json['notifications']
+    assert any(i['title'] == 'Your EpicVM account is approved' for i in items)
+    assert any(i['category'] == 'assignment' for i in items)
+    ids = [i['id'] for i in items]
+    assert post(alice, 'account/notifications/read', ids=ids).status_code == 200
+    assert alice.get('/EpicVM/api/account/notifications').json['unreadCount'] == 0
+    assert post(alice, 'account/notifications/read', ids=ids).status_code == 200
+    assert post(alice, 'account/notifications/read', ids=[]).status_code == 400
+    assert post(alice, 'account/notifications/read', ids=['x'] * 101).status_code == 400

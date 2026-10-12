@@ -26,7 +26,7 @@ def test_local_launch_preserves_owner_checks_and_normal_fallback(tmp_path, monke
     monkeypatch.setenv('EPICVM_DIRECT_STREAMS_FILE', str(streams))
     monkeypatch.setenv('EPICVM_LOCAL_STREAMS_FILE', str(local))
     monkeypatch.setenv('EPICVM_DIRECT_STREAM_KEY_FILE', str(key))
-    actor = {'username': 'alice'}
+    actor = {'id': 1, 'username': 'alice', 'sessionVersion': 1}
     app = Flask(__name__)
     register_direct_stream(app, {'_current_portal_user': lambda: actor, '_admin_vm_sso_authenticated': lambda: False,
                                 '_host_game_stream_record': lambda _: {'host_id': 'pc', 'realm': 'portal', 'username': 'alice'}})
@@ -35,6 +35,8 @@ def test_local_launch_preserves_owner_checks_and_normal_fallback(tmp_path, monke
     assert response.status_code == 200
     assert b'https://lan.example.com:8443/EpicVM/auth/redeem' in response.data
     assert b'Use normal connection' in response.data
+    assert b'Report a problem' in response.data
+    assert b'report=bug' in response.data
     assert b'abort(),5000' in response.data
     assert b'evil.example.com' not in response.data
     assert 'connect-src https://lan.example.com:8443' in response.headers['Content-Security-Policy']

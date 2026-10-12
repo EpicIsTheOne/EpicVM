@@ -1,0 +1,43 @@
+name: epicvm-selfhost
+services:
+  portal:
+    image: ${EPICVM_SERVER_IMAGE:?Set a verified EpicVM server image tag or digest}
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      EPICVM_PORTAL_BIND: 0.0.0.0
+      EPICVM_HOSTING_PROFILE: multiseat
+    volumes:
+      - ${EPICVM_SETUP_ROOT:?Choose the protected setup directory}:/state
+    expose:
+      - "5050"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - proxy
+  gateway:
+    image: ${EPICVM_CADDY_IMAGE:?Set a verified Caddy image tag or digest}
+    restart: unless-stopped
+    depends_on:
+      portal:
+        condition: service_healthy
+    ports:
+      - "${EPICVM_HTTP_PORT:-80}:80"
+      - "${EPICVM_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile.selfhost:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy-config:/config
+    environment:
+      EPICVM_PORTAL_HOST: ${EPICVM_PORTAL_HOST:?Set your portal hostname}
+    networks:
+      - proxy
+networks:
+  proxy: {}
+volumes:
+  certificates: {}
+  caddy-config: {}

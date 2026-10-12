@@ -94,3 +94,10 @@ def test_runtime_syncs_all_dashboard_python_modules_and_has_healthcheck():
     assert 'install -m 644 "$dashboard_source"' in ensure
     assert 'HEALTHCHECK' in dockerfile
     assert '/Dashboard/' in dockerfile
+
+
+def test_dashboard_backend_defaults_to_loopback_in_both_launchers():
+    for path in ('server/blobedash-ensure.sh', 'server/install.sh'):
+        source = _text(path)
+        assert '-p "${DASHBOARD_BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT}:5000"' in source
+        assert '-p "${DASHBOARD_PORT}:5000"' not in source

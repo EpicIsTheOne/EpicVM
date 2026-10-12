@@ -1,12 +1,15 @@
+import HostEnrollment from '../components/HostEnrollment'
+import Notifications from '../components/Notifications'
 import React, { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { contextFromSearch, contextLabels, contextValue, safeContext } from '../supportContext'
+import { Link, useLocation } from 'react-router-dom'
 import { Gear, Users, Desktop, ChatCircle, ShieldCheck, ArrowLeft, CheckCircle } from '@phosphor-icons/react'
 import './AccountWorkspace.css'
 import SharedGames from './SharedGames'
 import EpiChat from '../components/EpiChat'
 
 const API = '/EpicVM/api'
-const kinds = { vm: 'VM request', feedback: 'Feedback', bug: 'Bug report' }
+const kinds = { desktop: 'Desktop access request', vm: 'VM request', feedback: 'Feedback', bug: 'Bug report' }
 const label = resource => `${resource.name} · ${resource.hostId || 'unavailable'}`
 const provisionStages = [
   ['queued', 'Queued'], ['cloning', 'Clone VM'], ['booting', 'First boot'],
@@ -38,7 +41,7 @@ async function read(path, options = {}) {
   return body
 }
 
-function Login({ onLogin, management }) {
+function Login({ onLogin, management, reportContext }) {
   const [realm, setRealm] = useState(management ? 'dashboard' : 'portal')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -57,7 +60,7 @@ function Login({ onLogin, management }) {
     } catch (err) { setError(err.message) }
     setBusy(false)
   }
-  if (!management) return <section className="aw-card aw-login"><ShieldCheck size={32} /><h1>Sign in to your account</h1><p>Use your EpicVM account to manage settings and requests.</p><Link className="aw-primary" to="/signin" state={{ from: '/settings' }}>Sign in to EpicVM</Link><p><Link to="/Management">Administrator sign-in</Link></p></section>
+  if (!management) return <section className="aw-card aw-login"><ShieldCheck size={32} /><h1>Sign in to your account</h1><p>Use your EpicVM account to manage settings and requests.</p><Link className="aw-primary" to="/signin" state={{ from: '/settings', reportContext }}>Sign in to EpicVM</Link><p><Link to="/Management">Administrator sign-in</Link></p></section>
   return <section className="aw-card aw-login"><ShieldCheck size={32} /><h1>Welcome to EpicVM</h1>
     <p>Sign in to {management ? 'manage accounts and requests' : 'manage your account'}.</p>
     <form onSubmit={submit}>
@@ -70,8 +73,11 @@ function Login({ onLogin, management }) {
   </section>
 }
 
-function TicketForm({ send, onSaved }) {
-  const [kind, setKind] = useState('vm')
+function TicketForm({ send, onSaved, reportContext, desktopRequest }) {
+  const [kind, setKind] = useState(reportContext ? 'bug' : 'desktop')
+  const [includeContext, setIncludeContext] = useState(true)
+  const reportHeading = useRef(null)
+  useEffect(() => { if (reportContext || desktopRequest) reportHeading.current?.focus() }, [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID())
@@ -79,19 +85,26 @@ function TicketForm({ send, onSaved }) {
     event.preventDefault(); setBusy(true); setError('')
     const form = event.currentTarget, fields = new FormData(form)
     try {
-      await send('/account/tickets', { kind, title: fields.get('title'), body: fields.get('body'), requestKey })
-      form.reset(); setRequestKey(crypto.randomUUID()); await onSaved('Sent. You can track the response below.')
+      await send('/account/tickets', { kind, title: fields.get('title'), body: fields.get('body'), requestKey, context: kind === 'bug' && includeContext ? reportContext : null })
+      form.reset(); setIncludeContext(false); setRequestKey(crypto.randomUUID()); await onSaved('Sent. You can track the response below.')
     } catch (err) { setError(err.message) }
     setBusy(false)
   }
-  return <section className="aw-card"><h2>How can we help?</h2><p>Requests and reports go directly to your EpicVM administrators.</p>
+  return <section className="aw-card" id="request-form"><h2 ref={reportHeading} tabIndex={-1}>How can we help?</h2><p>Requests and reports go directly to your EpicVM administrators.</p>
     <form onSubmit={submit}>
-      <label>Type<select value={kind} onChange={e => { setKind(e.target.value); setRequestKey(crypto.randomUUID()) }}><option value="vm">Request a VM</option><option value="feedback">Send feedback</option><option value="bug">Report a bug</option></select></label>
-      <label>Subject<input name="title" maxLength={120} placeholder={kind === 'vm' ? 'A Windows VM for development' : 'A short summary'} required /></label>
-      <label>{kind === 'vm' ? 'What do you need?' : 'Details'}<textarea name="body" minLength={5} maxLength={6000} rows={5} placeholder={kind === 'vm' ? 'Tell us the operating system, resources, and what you will use it for.' : kind === 'bug' ? 'What happened? What did you expect? Include steps to reproduce, but no passwords or access tokens.' : 'Tell us what could be better.'} required /></label>
+      <label>Type<select value={kind} onChange={e => { setKind(e.target.value); setRequestKey(crypto.randomUUID()) }}><option value="desktop">Request desktop access</option><option value="vm">Request a VM</option><option value="feedback">Send feedback</option><option value="bug">Report a bug</option></select></label>
+      <label>Subject<input name="title" maxLength={120} placeholder={kind === 'desktop' ? 'Access to a Windows desktop' : kind === 'vm' ? 'A Windows VM for development' : 'A short summary'} defaultValue={reportContext ? 'Desktop connection problem' : ''} required /></label>
+      <label>{['vm', 'desktop'].includes(kind) ? 'What do you need?' : 'Details'}<textarea name="body" minLength={5} maxLength={6000} rows={5} placeholder={kind === 'desktop' ? 'Tell us whose host PC you want to use and what you will use the desktop for.' : kind === 'vm' ? 'Tell us the operating system, resources, and what you will use it for.' : kind === 'bug' ? 'What happened? What did you expect? Include steps to reproduce, but no passwords or access tokens.' : 'Tell us what could be better.'} required /></label>
+      {kind === 'bug' && reportContext && Object.keys(reportContext).length > 0 && <fieldset><legend>Connection details preview</legend><p>Only the details below will be included. Add what happened in Details.</p><ContextPreview context={reportContext} /><label className="aw-toggle"><input type="checkbox" checked={includeContext} onChange={e => setIncludeContext(e.target.checked)} />Include these connection details in my report</label></fieldset>}
       {error && <p role="alert" className="aw-error">{error}</p>}
       <button className="aw-primary" disabled={busy}>{busy ? 'Sending…' : 'Send request or report'}</button>
     </form></section>
+}
+
+function ContextPreview({ context }) {
+  const values = Object.entries(safeContext(context))
+  if (!values.length) return null
+  return <dl className="aw-connection-details">{values.map(([key, value]) => <React.Fragment key={key}><dt>{contextLabels[key]}</dt><dd>{contextValue(key, value)}</dd></React.Fragment>)}</dl>
 }
 
 function PasswordForm({ send, refresh }) {
@@ -114,7 +127,7 @@ function PasswordForm({ send, refresh }) {
   </form></section>
 }
 
-function Ticket({ ticket, admin, resources = [], send, onSaved }) {
+function Ticket({ ticket, admin, resources = [], send, onSaved, onDesktopAccess }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const [status, setStatus] = useState('in_review')
   const [jevBusy, setJevBusy] = useState(false), [advisory, setAdvisory] = useState(null)
@@ -137,16 +150,17 @@ function Ticket({ ticket, admin, resources = [], send, onSaved }) {
     } catch (err) { setError(err.message) }
     setBusy(false)
   }
-  return <article className="aw-ticket"><div className="aw-row"><span className="aw-eyebrow">{kinds[ticket.kind]}</span><span className={`aw-badge ${closed ? 'closed' : ''}`}>{ticket.status.replaceAll('_', ' ')}</span></div>
+  return <article className="aw-ticket" id={'request-' + ticket.id}><div className="aw-row"><span className="aw-eyebrow">{kinds[ticket.kind]}</span><span className={`aw-badge ${closed ? 'closed' : ''}`}>{ticket.status.replaceAll('_', ' ')}</span></div>
     <h3>{ticket.title}</h3>{admin && <p className="aw-meta">{ticket.username} · {ticket.realm === 'portal' ? 'EpicVM account' : 'Dashboard administrator'}</p>}
-    <p className="aw-body">{ticket.body}</p><p className="aw-meta">{new Date(ticket.created_at * 1000).toLocaleString()}</p>
+    <p className="aw-body">{ticket.body}</p><ContextPreview context={ticket.context} /><p className="aw-meta">{new Date(ticket.created_at * 1000).toLocaleString()}</p>
     {admin && <div className="aw-jev"><div className="aw-row"><strong>Jev advisory</strong><button type="button" disabled={jevBusy} onClick={() => askJev(ticket.kind === 'vm' ? 'vm_request' : 'ticket_triage')}>{jevBusy ? 'Analyzing…' : 'Analyze request'}</button></div>
       <small>Read-only semantic guidance. It never approves, assigns, closes, or changes a machine.</small>
       {advisory && <div className="aw-jev-results">{Object.entries(advisory.answers || {}).map(([key, answer]) => <span key={key}><b>{key.replaceAll('_', ' ')}</b>{String(answer.choice ?? (answer.score !== undefined ? Number(answer.score).toFixed(1) : `${Math.round(Number(answer.noul || 0) * 100)}%`))}{answer.confidence !== undefined ? ` · ${Math.round(answer.confidence * 100)}% confidence` : ''}</span>)}</div>}
     </div>}
     {ticket.response && <div className="aw-reply"><strong>Administrator response</strong><p>{ticket.response}</p></div>}
+    {admin && !closed && ticket.kind === 'desktop' && <p>{ticket.desktopAssigned ? 'A desktop is assigned to this account. You can mark access ready with a reply.' : 'Assign this account a desktop in the Machines section, then mark access ready with a reply.'}<button type="button" disabled={ticket.realm !== 'portal'} onClick={() => onDesktopAccess(ticket)}>Manage desktop access</button></p>}
     {admin && !closed && <form ref={formRef} onSubmit={submit}>
-      <label>Next step<select value={status} onChange={e => setStatus(e.target.value)}><option value="in_review">Reviewing</option>{ticket.kind === 'vm' ? <option value="fulfilled">Accept and assign a VM</option> : <option value="resolved">Resolved</option>}<option value="declined">Declined</option></select></label>
+      <label>Next step<select value={status} onChange={e => setStatus(e.target.value)}><option value="in_review">Reviewing</option>{ticket.kind === 'vm' ? <option value="fulfilled">Accept and assign a VM</option> : <option value="resolved">{ticket.kind === 'desktop' ? 'Desktop access ready' : 'Resolved'}</option>}<option value="declined">Declined</option></select></label>
       {status === 'fulfilled' && <label>Assign VM<select name="resourceKey" required defaultValue=""><option value="" disabled>Choose an available VM</option>{resources.filter(r => r.resourceType === 'vm' && r.classification === 'managed' && r.available !== false).map(r => <option key={r.resourceKey} value={r.resourceKey}>{label(r)}</option>)}</select><small>Need a new machine? Create it in the Machines section, then refresh before assigning it.</small></label>}
       <label>Reply<textarea name="response" rows={3} maxLength={3000} required placeholder="Let them know what happens next." /></label>
       <button type="button" disabled={jevBusy} onClick={() => askJev('response_verification', { proposedResponse: formRef.current?.elements?.response?.value || '', evidence: { selectedStatus: status } })}>Check reply with Jev</button>
@@ -166,7 +180,7 @@ function UserCard({ user, resources, send, onSaved, self }) {
     catch (err) { setError(err.message) }
     setBusy(false)
   }
-  return <article className="aw-ticket"><div className="aw-row"><h3>{user.username}</h3><span className="aw-badge">{user.disabled ? 'disabled' : user.accountStatus}</span></div>
+  return <article className="aw-ticket" id={'account-' + user.id}><div className="aw-row"><h3>{user.username}</h3><span className="aw-badge">{user.disabled ? 'disabled' : user.accountStatus}</span></div>
     <p className="aw-meta">{user.isAdmin ? 'Administrator' : 'Member'}{user.email ? ` · ${user.email}` : ''}</p>{user.who && <p>{user.who}</p>}
     {self ? <p>Manage your password in <Link to="/settings">Settings</Link>. Another administrator can update your account access.</p> : <fieldset disabled={busy}>
       <div className="aw-actions">{user.accountStatus !== 'approved' && <button onClick={() => act('approve')}>Approve account</button>}{user.accountStatus === 'pending' && <button onClick={() => act('reject')}>Reject account</button>}<button onClick={() => act(user.disabled ? 'enable' : 'disable')}>{user.disabled ? 'Enable' : 'Disable'} account</button></div>
@@ -184,7 +198,7 @@ function AccessRequest({ item, send, onSaved }) {
     catch (err) { setError(err.message) }
     setBusy(false)
   }
-  return <article className="aw-ticket"><h3>{item.username} requested {item.vm_name}</h3><p className="aw-meta">{item.host_id || 'Unresolved host'} · {item.status}</p><p className="aw-body">{item.note}</p>{item.status === 'pending' && <div className="aw-actions"><button disabled={busy || !item.resource_key} onClick={() => act('approve')}>Grant access</button><button disabled={busy} onClick={() => act('deny')}>Decline</button></div>}{error && <p role="alert" className="aw-error">{error}</p>}</article>
+  return <article className="aw-ticket" id={'access-' + item.id}><h3>{item.username} requested {item.vm_name}</h3><p className="aw-meta">{item.host_id || 'Unresolved host'} · {item.status}</p><p className="aw-body">{item.note}</p>{item.status === 'pending' && <div className="aw-actions"><button disabled={busy || !item.resource_key} onClick={() => act('approve')}>Grant access</button><button disabled={busy} onClick={() => act('deny')}>Decline</button></div>}{error && <p role="alert" className="aw-error">{error}</p>}</article>
 }
 
 function HostHealth({ hosts = [] }) {
@@ -320,6 +334,9 @@ function VmCreator({ content, readManagement, send, onSaved }) {
 }
 
 export default function AccountWorkspace({ management = false }) {
+  const location = useLocation()
+  const reportContext = contextFromSearch(location.search)
+  const [desktopRequester, setDesktopRequester] = useState(null)
   const [session, setSession] = useState(null), [checking, setChecking] = useState(true)
   const [content, setContent] = useState(null), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [tab, setTab] = useState(management ? 'machines' : 'requests'), [search, setSearch] = useState(''), [closed, setClosed] = useState(false)
@@ -339,8 +356,13 @@ export default function AccountWorkspace({ management = false }) {
     catch (err) { setError(err.message) }
   }
   useEffect(() => { loadSession() }, [])
-  useEffect(() => { setTab(management ? 'machines' : 'requests') }, [management])
+  useEffect(() => { setTab(management ? (['requests', 'reports', 'accounts', 'hosts'].includes(new URLSearchParams(location.search).get('section')) ? new URLSearchParams(location.search).get('section') : 'machines') : 'requests') }, [management, location.search])
   useEffect(() => { setContent(null); if (session && !session.user.reauthenticate && (!management || session.user.isAdmin)) loadContent() }, [management, session?.user.username, session?.user.realm])
+  useEffect(() => {
+    if (!/^#(?:request-[a-f0-9]{24}|account-\d+|access-\d+)$/.test(location.hash)) return
+    if (management && location.hash.startsWith('#request-')) setClosed(true)
+    document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'center' })
+  }, [location.hash, content, closed, tab])
   async function send(path, body) {
     return read(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify(body) })
   }
@@ -352,17 +374,17 @@ export default function AccountWorkspace({ management = false }) {
   }
   const who = session?.user
   const tickets = content?.tickets || []
-  const filtered = tickets.filter(t => closed || !['fulfilled', 'resolved', 'declined'].includes(t.status)).filter(t => tab === 'reports' ? t.kind !== 'vm' : t.kind === 'vm')
-  return <div className="aw"><header className="aw-header"><Link to="/" className="aw-brand"><span>E</span> EpicVM</Link><nav aria-label="Account navigation"><Link to="/portal">Your workspace</Link><Link to="/settings" aria-current={!management ? 'page' : undefined}><Gear /> Settings</Link>{who?.isAdmin && <Link to="/Management" aria-current={management ? 'page' : undefined}><ShieldCheck /> Management</Link>}{who && <button onClick={() => signout().catch(err => setError(err.message))}>Sign out</button>}</nav></header>
-    <main className="aw-main">{checking ? <p role="status">Checking your session…</p> : !who || who.reauthenticate ? <><Login management={management || who?.realm === 'dashboard-config'} onLogin={loadSession} />{who?.reauthenticate && <p className="aw-meta">Your older admin session needs a fresh sign-in for account settings.</p>}</> : management && !who.isAdmin ? <section className="aw-card"><h1>Administrator access required</h1><p>Your settings and requests are available in your account.</p><Link to="/settings">Open Settings</Link></section> : <>
+  const filtered = tickets.filter(t => closed || !['fulfilled', 'resolved', 'declined'].includes(t.status)).filter(t => tab === 'reports' ? !['vm', 'desktop'].includes(t.kind) : ['vm', 'desktop'].includes(t.kind))
+  return <div className="aw"><header className="aw-header"><Link to="/" className="aw-brand"><span>E</span> EpicVM</Link><nav aria-label="Account navigation">{who && <Notifications owner={JSON.stringify([who.realm, who.username])} onChange={loadContent} />}<Link to="/portal">Your workspace</Link><Link to="/settings" aria-current={!management ? 'page' : undefined}><Gear /> Settings</Link>{who?.isAdmin && <Link to="/Management" aria-current={management ? 'page' : undefined}><ShieldCheck /> Management</Link>}{who && <button onClick={() => signout().catch(err => setError(err.message))}>Sign out</button>}</nav></header>
+    <main className="aw-main">{checking ? <p role="status">Checking your session…</p> : !who || who.reauthenticate ? <><Login reportContext={reportContext} management={management || who?.realm === 'dashboard-config'} onLogin={loadSession} />{who?.reauthenticate && <p className="aw-meta">Your older admin session needs a fresh sign-in for account settings.</p>}</> : management && !who.isAdmin ? <section className="aw-card"><h1>Administrator access required</h1><p>Your settings and requests are available in your account.</p><Link to="/settings">Open Settings</Link></section> : <>
       <div className="aw-heading"><div><div className="aw-eyebrow">{management ? 'EPICVM ADMIN' : 'YOUR ACCOUNT'}</div><h1>{management ? 'Management' : 'Settings'}</h1><p>{management ? 'Machines, people, and requests in one focused workspace.' : `Signed in as ${who.username} · ${who.realm === 'portal' ? 'EpicVM account' : 'Dashboard administrator'}`}</p></div>{management && <a href="/Dashboard/" className="aw-full">Advanced dashboard ↗</a>}</div>
       {notice && <div className="aw-notice" role="status"><CheckCircle size={20} />{notice}<button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}{error && <div className="aw-error" role="alert">{error} <button onClick={loadContent}>Retry</button></div>}
-      {!management ? <><div className="aw-columns"><PasswordForm send={send} refresh={async message => { await loadSession(); setNotice(message) }} /><TicketForm send={send} onSaved={saved} /></div><section className="aw-card"><div className="aw-row"><h2>Your requests & reports</h2><button onClick={loadContent}>Refresh</button></div><p>Administrator replies and status updates appear here.</p>{!content ? <p>Loading…</p> : !tickets.length ? <div className="aw-empty">Nothing sent yet. Your first request or report will appear here.</div> : tickets.map(t => <Ticket key={t.id + t.updated_at} ticket={t} />)}</section></> : <>
-        <div className="aw-tabs aw-tabs-four" role="group" aria-label="Management sections">{[['machines', Desktop, 'Machines', (content?.jobs || []).length], ['requests', ChatCircle, 'Requests', tickets.filter(t => t.kind === 'vm' && ['pending','in_review'].includes(t.status)).length + (content?.requests || []).filter(r => r.status === 'pending').length], ['accounts', Users, 'Accounts', (content?.users || []).filter(u => u.accountStatus === 'pending').length], ['reports', ChatCircle, 'Feedback', tickets.filter(t => t.kind !== 'vm' && ['pending','in_review'].includes(t.status)).length]].map(([key, Icon, title, count]) => <button key={key} aria-pressed={tab === key} onClick={() => setTab(key)}><Icon size={22} />{title}<span>{count}</span></button>)}</div>
-        {tab === 'machines' && <><HostHealth hosts={content?.hosts || []} /><VmCreator content={content} readManagement={readManagement} send={send} onSaved={saved} /><MachineFleet resources={content?.resources || []} send={send} onSaved={saved} /><SharedGames resources={content?.resources || []} users={content?.users || []} send={send} /></>}
+      {!management ? <><div className="aw-columns"><PasswordForm send={send} refresh={async message => { await loadSession(); setNotice(message) }} /><TicketForm key={location.search} desktopRequest={new URLSearchParams(location.search).get('request') === 'desktop'} reportContext={reportContext} send={send} onSaved={saved} /></div><section className="aw-card"><div className="aw-row"><h2>Your requests & reports</h2><button onClick={loadContent}>Refresh</button></div><p>Administrator replies and status updates appear here.</p>{!content ? <p>Loading…</p> : !tickets.length ? <div className="aw-empty">Nothing sent yet. Your first request or report will appear here.</div> : tickets.map(t => <Ticket key={t.id + t.updated_at} ticket={t} />)}</section></> : <>
+        <div className="aw-tabs aw-tabs-four" role="group" aria-label="Management sections">{[['machines', Desktop, 'Machines', (content?.jobs || []).length], ['requests', ChatCircle, 'Requests', tickets.filter(t => ['vm', 'desktop'].includes(t.kind) && ['pending','in_review'].includes(t.status)).length + (content?.requests || []).filter(r => r.status === 'pending').length], ['accounts', Users, 'Accounts', (content?.users || []).filter(u => u.accountStatus === 'pending').length], ['reports', ChatCircle, 'Feedback', tickets.filter(t => !['vm', 'desktop'].includes(t.kind) && ['pending','in_review'].includes(t.status)).length]].map(([key, Icon, title, count]) => <button key={key} aria-pressed={tab === key} onClick={() => setTab(key)}><Icon size={22} />{title}<span>{count}</span></button>)}</div>
+        {(tab === 'machines' || tab === 'hosts') && <><HostEnrollment send={send} /><HostHealth hosts={content?.hosts || []} />{session.hostingProfile !== 'multiseat' && <VmCreator content={content} readManagement={readManagement} send={send} onSaved={saved} />}<MachineFleet resources={content?.resources || []} send={send} onSaved={saved} /><SharedGames desktopRequester={desktopRequester} onDesktopAssigned={() => { setDesktopRequester(null); setTab('requests'); saved('Desktop access saved. Review the request and mark access ready.').catch(err => setError(err.message)) }} resources={content?.resources || []} users={content?.users || []} send={send} /></>}
         {tab === 'requests' && content?.requests?.length > 0 && <section className="aw-card"><h2>Machine access requests</h2><p>Requests from the machine browser. Account approval remains separate.</p>{content.requests.filter(r => closed || r.status === 'pending').map(r => <AccessRequest key={r.id + r.status} item={r} send={send} onSaved={saved} />)}</section>}
-        {tab !== 'machines' && <section className="aw-card"><div className="aw-row"><h2>{tab === 'accounts' ? 'Accounts & assignments' : tab === 'requests' ? 'VM requests' : 'Feedback & bug reports'}</h2><button onClick={loadContent}>Refresh</button></div>
-          {!content ? <p>Loading…</p> : tab === 'accounts' ? <><label>Find an account<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by username or email" /></label>{content.users.filter(u => `${u.username} ${u.email || ''}`.toLowerCase().includes(search.toLowerCase())).map(u => <UserCard key={u.username + JSON.stringify(u)} user={u} resources={content.resources || []} send={send} onSaved={saved} self={who.realm === 'portal' && who.username === u.username} />)}<details><summary>Dashboard administrator identities</summary><p>These are separate from EpicVM accounts. Administrators change their own passwords in Settings.</p>{(content.adminIdentities || []).map(u => <p key={u.source}>{u.username} · {u.source}</p>)}</details></> : <><label className="aw-toggle"><input type="checkbox" checked={closed} onChange={e => setClosed(e.target.checked)} />Include closed requests</label>{filtered.length ? filtered.map(t => <Ticket key={t.id + t.updated_at} ticket={t} admin resources={content.resources || []} send={send} onSaved={saved} />) : <div className="aw-empty">You're all caught up. New {tab === 'requests' ? 'VM requests' : 'feedback and bug reports'} will appear here.</div>}</>}
+        {!['machines', 'hosts'].includes(tab) && <section className="aw-card"><div className="aw-row"><h2>{tab === 'accounts' ? 'Accounts & assignments' : tab === 'requests' ? 'Desktop & VM requests' : 'Feedback & bug reports'}</h2><button onClick={loadContent}>Refresh</button></div>
+          {!content ? <p>Loading…</p> : tab === 'accounts' ? <><label>Find an account<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by username or email" /></label>{content.users.filter(u => `${u.username} ${u.email || ''}`.toLowerCase().includes(search.toLowerCase())).map(u => <UserCard key={u.username + JSON.stringify(u)} user={u} resources={content.resources || []} send={send} onSaved={saved} self={who.realm === 'portal' && who.username === u.username} />)}<details><summary>Dashboard administrator identities</summary><p>These are separate from EpicVM accounts. Administrators change their own passwords in Settings.</p>{(content.adminIdentities || []).map(u => <p key={u.source}>{u.username} · {u.source}</p>)}</details></> : <><label className="aw-toggle"><input type="checkbox" checked={closed} onChange={e => setClosed(e.target.checked)} />Include closed requests</label>{filtered.length ? filtered.map(t => <Ticket key={t.id + t.updated_at} ticket={t} admin resources={content.resources || []} send={send} onSaved={saved} onDesktopAccess={ticket => { setDesktopRequester(ticket); setTab('machines') }} />) : <div className="aw-empty">You're all caught up. New {tab === 'requests' ? 'Desktop & VM requests' : 'feedback and bug reports'} will appear here.</div>}</>}
         </section>}
       </>}
     </>}</main><footer className="aw-footer"><Link to="/"><ArrowLeft /> Back to EpicVM</Link><span>EpicVM · Your workspace, connected.</span></footer>{who && <EpiChat />}</div>

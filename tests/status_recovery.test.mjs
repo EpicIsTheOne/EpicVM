@@ -8,6 +8,9 @@ test('only healthy verified desktops count as ready', () => {
   for (const status of ['Ready', 'Streaming']) assert.equal(desktopStatus({ available: true, seat: { status } }).ready, true)
   assert.equal(desktopStatus({ available: true }, false).label, 'Status unverified')
   assert.equal(desktopStatus({ available: false }).label, 'Unavailable')
+  assert.equal(desktopStatus({ available: false, hostOnline: false }).label, 'Host offline')
+  assert.equal(desktopStatus({ available: true, hostOnline: false }).ready, false)
+  assert.equal(desktopStatus({ hostOnline: false }, false).label, 'Status unverified')
   assert.equal(desktopStatus({ available: true, errorMessage: 'duplicate seats' }).label, 'Needs recovery')
   assert.equal(desktopStatus({ available: true, seat: { status: 'Error' } }).label, 'Needs recovery')
   assert.equal(desktopStatus({ available: true, seat: { status: 'Ready', errorMessage: 'failed capture' } }).ready, false)
@@ -32,4 +35,17 @@ test('only a current confirmed 401 expires the session', () => {
 test('sign-in return targets cannot redirect outside the app', () => {
   assert.equal(signInDestination('/settings'), '/settings')
   for (const value of ['https://example.com', '//example.com', '/unknown', undefined]) assert.equal(signInDestination(value), '/portal')
+})
+
+test('paused and full hosts block new seats but preserve healthy resume', () => {
+  for (const [hosting, label] of [[{ paused: true }, 'Hosting paused'], [{ full: true }, 'Host full']]) {
+    assert.equal(desktopStatus({ available: true, hosting }).label, label)
+    assert.equal(desktopStatus({ available: true, hosting }).ready, false)
+    for (const status of ['Ready', 'Streaming']) assert.equal(desktopStatus({ available: true, hosting, seat: { status } }).ready, true)
+    assert.equal(desktopStatus({ available: true, hosting, seat: { status: 'Error' } }).label, 'Needs recovery')
+    assert.equal(desktopStatus({ available: true, hosting }, false).label, 'Status unverified')
+    assert.equal(desktopStatus({ available: false, hostOnline: false, hosting }).label, 'Host offline')
+  }
+  assert.equal(desktopStatus({ available: true, hosting: { paused: true, full: true } }).label, 'Hosting paused')
+  assert.equal(desktopStatus({ available: true, hosting: { paused: false, full: false } }).ready, true)
 })

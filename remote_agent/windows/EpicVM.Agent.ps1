@@ -202,6 +202,10 @@ function New-EpicVMAgentState {
         CompletedOperations = @{}
         DeferProvisioning = $false
     }
+    if ([string]$Provider.Name -eq 'MultiSeat') {
+        $agentState | Add-Member -MemberType NoteProperty -Name Provisioning -Value $null
+        return $agentState
+    }
     if (Get-Command -Name New-EpicVMProvisioningStore -ErrorAction SilentlyContinue) {
         $agentState | Add-Member -MemberType NoteProperty -Name Provisioning -Value (New-EpicVMProvisioningStore -Config $Config)
         if (Get-Command -Name Invoke-EpicVMProvisioningRecovery -ErrorAction SilentlyContinue) {
@@ -293,6 +297,9 @@ function New-EpicVMProvider {
         [AllowNull()] [scriptblock] $CommandInvoker = $null
     )
     switch ([string](Get-EpicVMProperty -Object $Config -Name 'Provider' -Default 'HyperV')) {
+        'MultiSeat' {
+            return @{ Name='MultiSeat'; GetCapabilities={ @{provider='multiseat';available=$true;create_vm=$false;features=@('host-gaming')} }; GetVMs={ @() }; GetVM={ throw 'VM hosting is disabled for this multiseat host.' }; CreateVM={ throw 'VM hosting is disabled for this multiseat host.' } }
+        }
         'HyperV' {
             return New-EpicVMHyperVProvider -Config $Config -CommandInvoker $CommandInvoker
         }
@@ -423,11 +430,20 @@ function Invoke-EpicVMApiRequest {
     $normalizedPath = '/' + $Path.Trim('/')
     $segments = @($normalizedPath.Trim('/').Split('/') | Where-Object { $_ -ne '' } | ForEach-Object { [Uri]::UnescapeDataString($_) })
     try {
+        if ([string]$State.Provider.Name -eq 'MultiSeat' -and $normalizedPath -match '^/v1/(vms|provisioning-jobs|deprovisioning-jobs)(/|$)' -and -not ($Method -eq 'GET' -and $normalizedPath -eq '/v1/vms')) {
+            return ConvertTo-EpicVMJsonResponse -StatusCode 403 -Body (New-EpicVMApiError -Code 'vm_profile_disabled' -Message 'VM hosting is disabled for this multiseat host.')
+        }
         if ($Method -eq 'GET' -and $normalizedPath -eq '/v1/health') {
             return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body ([ordered]@{ ok = $true; status = 'ok'; agent = 'EpicVM'; provider = [string]$State.Provider.Name })
         }
         if ($normalizedPath -eq '/v1/host-gaming' -and $Method -eq 'GET') {
             return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Get-EpicVMHostGamingView)
+        }
+        if ($normalizedPath -eq '/v1/host-gaming/local-accounts' -and $Method -eq 'GET') {
+            return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Get-EpicVMExistingLocalAccounts)
+        }
+        if ($normalizedPath -eq '/v1/host-gaming/local-account-assign' -and $Method -eq 'POST') {
+            return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Set-EpicVMExistingAccountAssignment (Get-EpicVMRequestBody -Body $Body))
         }
         if ($normalizedPath -eq '/v1/host-gaming/launch' -and $Method -eq 'POST') {
             return ConvertTo-EpicVMJsonResponse -StatusCode 200 -Body (Start-EpicVMHostGame (Get-EpicVMRequestBody -Body $Body))
@@ -827,7 +843,7 @@ function Test-EpicVMMutationRequest {
         [Parameter(Mandatory)] [string] $Path
     )
     if ($Method -eq 'DELETE' -and $Path -match '^/v1/vms/[^/]+$') { return $true }
-    if ($Method -eq 'POST' -and $Path -match '^/v1/host-gaming/(launch|desktop|stop|pair|pair/complete|recover|games|games/remove)$') { return $true }
+    if ($Method -eq 'POST' -and $Path -match '^/v1/host-gaming/(launch|desktop|stop|pair|pair/complete|recover|games|games/remove|local-account-assign)$') { return $true }
     if ($Method -eq 'POST' -and ($Path -eq '/v1/provisioning-jobs' -or $Path -eq '/v1/deprovisioning-jobs' -or $Path -match '^/v1/provisioning-jobs/[^/]+/(claim|claim-reissue|guest-recovery|network-recovery|direct-diagnostic|console-credentials|console-complete|console-failed)$')) { return $true }
     if ($Method -eq 'POST' -and ($Path -eq '/v1/vms' -or $Path -match '^/v1/vms/[^/]+/(start|stop|restart|gpu-partition)$' -or $Path -match '^/v1/vms/[^/]+/actions/(start|stop|restart|delete)$')) { return $true }
     return $false
@@ -889,10 +905,7 @@ if (-not $NoStart) {
     $token = Get-EpicVMAgentToken -Config $config
     $providerConfig = @{}
     foreach ($property in $config.PSObject.Properties) { $providerConfig[$property.Name] = $property.Value }
-    switch ([string]$config.Provider) {
-        'HyperV' { $provider = New-EpicVMHyperVProvider -Config $providerConfig }
-        default { throw ("Unsupported provider: {0}" -f $config.Provider) }
-    }
+    $provider = New-EpicVMProvider -Config $providerConfig
     $state = New-EpicVMAgentState -Config $config -Token $token -Provider $provider
     Start-EpicVMAgent -State $state -Bind ([string]$config.BindAddress) -ListenPort ([int]$config.Port)
 }

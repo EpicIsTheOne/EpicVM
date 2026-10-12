@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Desktop, WindowsLogo, GameController, Power, Plug, ArrowClockwise, Stop, Spinner, Plus, CaretDown, Laptop } from '@phosphor-icons/react'
 import { myVms, logout, startVm, stopVm, restartVm, addCloudPc, pairCloudPc } from '../api'
 import { AvailableGames } from './SharedGames'
+import Notifications from '../components/Notifications'
+import DesktopRequestStatus from '../components/DesktopRequestStatus'
 import EpiChat from '../components/EpiChat'
 
 const TYPE_META = {
@@ -48,6 +50,7 @@ function readinessBadge(r) {
 export default function Portal({ user, onSignout }) {
   const navigate = useNavigate()
   const username = user?.username || 'user'
+  const [desktopRequest, setDesktopRequest] = useState(null)
   const initialCache = useRef(cachedMachines(username))
   const [vms, setVms] = useState(initialCache.current?.vms || null)
   const [summary, setSummary] = useState(initialCache.current?.summary || null)
@@ -103,7 +106,7 @@ export default function Portal({ user, onSignout }) {
   useEffect(() => {
     if (!loading) return undefined
     const checking = window.setTimeout(() => setLoadingMessage('Your account is connected. We’re checking live host status now…'), 1400)
-    const slower = window.setTimeout(() => setLoadingMessage('This host is taking a little longer to answer. You can safely stay on this page.'), 5000)
+    const slower = window.setTimeout(() => setLoadingMessage('Checking whether your hosts are online…'), 5000)
     return () => { window.clearTimeout(checking); window.clearTimeout(slower) }
   }, [loading])
 
@@ -171,7 +174,7 @@ export default function Portal({ user, onSignout }) {
           <span className="evm-beta-pill">BETA</span>
         </div>
         <div className="evm-ph-right">
-          <span className="evm-who">@{username}</span>
+          <span className="evm-who">@{username}</span><Notifications owner={JSON.stringify([user?.realm || 'portal', username])} />
           <a className="evm-btn evm-btn-ghost evm-btn-sm" href="/EpicVM/settings">Settings</a>
           {user?.isAdmin && <a className="evm-btn evm-btn-ghost evm-btn-sm" href="/EpicVM/Management">Management</a>}
           <button className="evm-btn evm-btn-ghost evm-btn-sm" onClick={signout}>Sign out</button>
@@ -197,7 +200,8 @@ export default function Portal({ user, onSignout }) {
       </section>
 
       {err && <div className="evm-error" role="status">{err} Previously loaded machines stay visible with status unverified.{checkedAt && <> Last checked: {new Date(checkedAt).toLocaleTimeString()}.</>} <button className="evm-link-btn" onClick={() => load()}>Refresh machine status</button></div>}
-      <AvailableGames onAvailability={setLibraryState} />
+      <DesktopRequestStatus key={"request:" + username} onRequest={setDesktopRequest} />
+      <AvailableGames desktopRequest={desktopRequest} key={"library:" + username} owner={JSON.stringify([user?.realm || 'portal', username])} onAvailability={setLibraryState} />
 
       {loading && !vms ? (
         <MachineSkeleton message={loadingMessage} />
@@ -272,7 +276,7 @@ export default function Portal({ user, onSignout }) {
             <div className="evm-empty">
               <Plus size={32} />
               <h3>Your account is approved</h3>
-              <p>Ask Epic to assign a desktop, game, or VM. You can send a request from <a href="/EpicVM/settings">Settings</a>.</p>
+              <p>{desktopRequest && ['pending', 'in_review'].includes(desktopRequest.status) ? 'Your desktop access request is waiting for administrator review. Track its status and replies above.' : <>Ask Epic to assign a desktop, game, or VM. Send a <a href="/EpicVM/settings?request=desktop#request-form">desktop access request</a> to get started.</>}</p>
             </div>
           )}
         </section>

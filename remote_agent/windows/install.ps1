@@ -42,7 +42,7 @@ else {
 $agentPath = Join-Path $InstallRoot 'EpicVM.Agent.ps1'
 $providerPath = Join-Path $InstallRoot 'providers/HyperVProvider.ps1'
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'EpicVM.Agent.ps1') -Destination $agentPath -Force
-foreach ($sourceFile in @('Provisioning.ps1','TemplateBuilder.ps1','Set-TailscaleOAuthSecret.ps1','ServiceRuntime.ps1','AgentTransport.ps1','SharedGames.ps1','SharedGamesWorker.ps1','SharedGamesCodex.ps1','HostGaming.ps1')) {
+foreach ($sourceFile in @('Provisioning.ps1','TemplateBuilder.ps1','Set-TailscaleOAuthSecret.ps1','ServiceRuntime.ps1','AgentTransport.ps1','SharedGames.ps1','SharedGamesWorker.ps1','SharedGamesCodex.ps1','HostingPolicy.ps1','HostGaming.ps1')) {
     Copy-Item -LiteralPath (Join-Path $sourceRoot $sourceFile) -Destination (Join-Path $InstallRoot $sourceFile) -Force
 }
 foreach ($providerFile in @('HyperVProvider.ps1','GuestProvider.ps1','TailscaleProvider.ps1','GamingGpuPProvider.ps1','OmarchyProvider.ps1')) {

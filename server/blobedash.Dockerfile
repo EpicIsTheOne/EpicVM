@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl jq \
-    && pip install --no-cache-dir flask==3.1.1 cryptography==46.0.3 gunicorn==26.2.0 \
+    && pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==83.0.0 \
+    && pip install --no-cache-dir Werkzeug==3.1.9 flask==3.1.3 cryptography==50.0.0 gunicorn==26.2.0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

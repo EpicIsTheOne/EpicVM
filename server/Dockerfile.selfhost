@@ -1,0 +1,15 @@
+FROM mrcreativ3001/moonlight-web-stream@sha256:82cf429ffea07bdb30d3f8bf14e9e97a0a7186b0864ec4250b680b3c0c302d2b AS pairing
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+RUN pip install --no-cache-dir Flask==3.1.3 Werkzeug==3.1.9 cryptography==50.0.0 waitress==3.0.2 psutil==7.2.2
+WORKDIR /package
+COPY dashboard /package/dashboard
+COPY memory_engine /package/memory_engine
+COPY scripts /package/scripts
+COPY epicvm_web/dist /package/epicvm_web/dist
+COPY --from=pairing /moonlight-web/web-server /package/viewer/web-server
+COPY --from=pairing /moonlight-web/static /package/viewer/static
+RUN groupadd -g 999 epicvm && useradd -u 999 -g 999 -M epicvm
+ENV EPICVM_PORTAL_BIND=0.0.0.0
+USER 999:999
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/EpicVM/api/host-setup/health',timeout=3)"
+CMD ["python", "/package/scripts/portal_service.py", "/state", "/package"]

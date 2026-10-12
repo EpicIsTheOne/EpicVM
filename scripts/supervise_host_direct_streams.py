@@ -15,6 +15,7 @@ from pathlib import PurePosixPath
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -37,8 +38,32 @@ UDP_WIDTH = 11
 SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
                "-o", "Hostname=100.114.225.31", "-o", "HostKeyAlias=72.60.29.204"]
 _frame_probe_lock = threading.Lock()
+RUNTIME_CONFIG = {}
+_SYNC_SOURCES = {}
+if os.environ.get('EPICVM_HOST_RUNTIME_CONFIG'):
+    RUNTIME_CONFIG = json.loads(Path(os.environ['EPICVM_HOST_RUNTIME_CONFIG']).read_text(encoding='utf-8-sig'))
+    HOST_ID = RUNTIME_CONFIG['hostId']
+    HOST_URL = RUNTIME_CONFIG['publicOrigin']
 CADDY_EXE = Path(r"C:\Users\Epic\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe")
 CADDY_CONFIG = Path(r"E:\Projects\WindowsStream\config\caddy\Caddyfile")
+if RUNTIME_CONFIG:
+    CADDY_EXE = Path(RUNTIME_CONFIG['caddyExe'])
+    CADDY_CONFIG = Path(RUNTIME_CONFIG['caddyConfig'])
+
+
+def _host_request(path, payload=None):
+    token = Path(RUNTIME_CONFIG['syncTokenFile']).read_text().strip()
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = request.Request(RUNTIME_CONFIG['portalOrigin'] + '/EpicVM/api/host-runtime/' + path,
+                          data=body, headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    class NoRedirect(request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            raise ValueError('Configured synchronization authority redirected')
+    with request.build_opener(NoRedirect()).open(req, timeout=20) as response:
+        data = response.read(16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024:
+            raise ValueError('Host response exceeds limit')
+        return json.loads(data)
 
 
 def _ensure_caddy(root: Path) -> None:
@@ -88,17 +113,49 @@ def _ensure_local_gateway(root: Path) -> None:
         return
     subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     str(Path(__file__).with_name('Start-EpicVMLocalGateway.ps1')), '-Root', str(root)],
-                   capture_output=True, check=True, timeout=20)
+                   # Detached Caddy can inherit PowerShell's output handles on
+                   # Windows. Captured pipes then wait forever for Caddy to exit.
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, timeout=20)
     digest = hashlib.sha256((root / 'caddy-routes.caddy').read_bytes()).hexdigest()
     marker = root / '.lan-caddy-applied'
     if marker.exists() and marker.read_text() == digest:
         return
     env = dict(os.environ)
-    env['CF_API_TOKEN'] = (root / 'lan-dns.token').read_text().strip()
+    if settings.get('mode') != 'local-ca':
+        env['CF_API_TOKEN'] = (root / 'lan-dns.token').read_text().strip()
     subprocess.run([str(root / 'caddy-lan.exe'), 'reload', '--address', '127.0.0.1:2020',
                     '--config', str(root / 'Caddyfile.lan')], env=env,
                    capture_output=True, check=True, timeout=20)
     marker.write_text(digest)
+
+
+def _publish_local_gateway(root: Path) -> None:
+    if not RUNTIME_CONFIG or not (root/'local-gateway.json').exists():
+        return
+    settings = _read(root/'local-gateway.json')
+    if settings.get('mode') != 'local-ca':
+        return  # Preserve manually provisioned domain-backed metadata.
+    from local_lan import private_address
+    address = private_address(settings['address'])
+    clean = {key: settings.get(key) for key in ('origin','setupUrl','certificateSha256')}
+    clean.update(mode='local-ca',clientTrustRequired=True,enabled=False)
+    try:
+        if settings.get('enabled') and any(address == item.address for values in psutil.net_if_addrs().values() for item in values if item.family == socket.AF_INET):
+            context = ssl.create_default_context(cafile=str(root/'lan-certificates/pki/authorities/local/root.crt'))
+            req = request.Request(settings['origin']+'/EpicVM/local-health')
+            opener=request.build_opener(request.HTTPSHandler(context=context), _NoLocalRedirect())
+            with opener.open(req, timeout=3) as response:
+                clean['enabled'] = response.status == 200 and response.read(16) == b'ok'
+    except (OSError, ValueError):
+        pass
+    _host_request('local-gateway', clean)
+    _write(root/'lan-status.json',dict(available=clean['enabled'],message='Local HTTPS ready; clients must trust the certificate.' if clean['enabled'] else 'Local address or gateway unavailable. Reserve the host address in DHCP, or repair local setup. Normal hosting is independent.'))
+
+
+class _NoLocalRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise ValueError('Local health redirected')
 
 
 def _start_gateway(root: Path) -> None:
@@ -106,7 +163,8 @@ def _start_gateway(root: Path) -> None:
         return
     subprocess.Popen(
         [sys.executable, str(root / "host_stream_gateway.py"), "--key", str(root / "signing.key"),
-         "--routes", str(root / "routes.json"), "--nonces", str(root / "nonces.sqlite3")],
+         "--routes", str(root / "routes.json"), "--nonces", str(root / "nonces.sqlite3"),
+         '--authority', RUNTIME_CONFIG.get('portalOrigin', 'https://techexplore.us') + '/EpicVM/api/stream/validate'],
         cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
@@ -121,7 +179,7 @@ def _start_instance(root: Path, route: str, port: int) -> None:
     if route.startswith("seat-"):
         _ensure_seat_udp_range(root, route)
     subprocess.Popen(
-        [r"E:\Projects\WindowsStream\moonlight-web\package\web-server.exe",
+        [str(Path(RUNTIME_CONFIG['viewerPackage']) / 'web-server.exe') if RUNTIME_CONFIG else r"E:\Projects\WindowsStream\moonlight-web\package\web-server.exe",
          "--config-path", "server/config.json", "run"],
         cwd=target, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW,
@@ -252,6 +310,8 @@ def _refresh_seat_pairing(root: Path, route: str, port: int, source_data: dict) 
 
 
 def _read_source_data(source: str) -> dict:
+    if RUNTIME_CONFIG:
+        return _SYNC_SOURCES[_route_name(source)]
     result = subprocess.run(["ssh", *SSH_OPTIONS, "kvm2",
                              "cat", f"{SOURCE}/{source}/server/data.json"],
                             capture_output=True, timeout=20, check=True)
@@ -259,6 +319,17 @@ def _read_source_data(source: str) -> dict:
 
 
 def _source_names() -> set[str]:
+    if RUNTIME_CONFIG:
+        result = _host_request('sync')
+        if result.get('hostId') != HOST_ID:
+            raise ValueError('Unexpected enrolled host identity')
+        _SYNC_SOURCES.clear()
+        for route, data in result['sources'].items():
+            from direct_stream_auth import ROUTE_RE
+            if not ROUTE_RE.fullmatch(route):
+                raise ValueError('Invalid host route')
+            _SYNC_SOURCES[route] = data
+        return {route if route.startswith('seat-') else route[3:] for route in _SYNC_SOURCES}
     command = ["ssh", *SSH_OPTIONS, "kvm2",
                f"find {SOURCE} -mindepth 3 -maxdepth 3 -name data.json -printf '%h\\n'"]
     result = subprocess.run(command, capture_output=True, text=True, timeout=20, check=True)
@@ -319,8 +390,11 @@ def _verify_pending_gaming_route(root: Path, routes: dict) -> None:
 def _import_one(root: Path, source: str, route: str, port: int, udp_port: int) -> dict | None:
     with tempfile.TemporaryDirectory(dir=root) as scratch:
         imported = Path(scratch) / "data.json"
-        subprocess.run(["scp", "-q", *SSH_OPTIONS, f"kvm2:{SOURCE}/{source}/server/data.json", str(imported)],
-                       capture_output=True, timeout=30, check=True)
+        if RUNTIME_CONFIG:
+            imported.write_text(json.dumps(_read_source_data(source)), encoding='utf-8')
+        else:
+            subprocess.run(["scp", "-q", *SSH_OPTIONS, f"kvm2:{SOURCE}/{source}/server/data.json", str(imported)],
+                           capture_output=True, timeout=30, check=True)
         data = _read(imported)
         hosts = data.get("hosts") or {}
         if len(hosts) != 1 or len(data.get("users") or {}) != 1:
@@ -334,9 +408,9 @@ def _import_one(root: Path, source: str, route: str, port: int, udp_port: int) -
             return None
         provision(source_data=imported,
                   template_config=root / "template-config.json",
-                  package=Path(r"E:\Projects\WindowsStream\moonlight-web\package"),
+                  package=Path(RUNTIME_CONFIG['viewerPackage']) if RUNTIME_CONFIG else Path(r"E:\Projects\WindowsStream\moonlight-web\package"),
                   root=root, route=route, address=address, sunshine_port=sunshine_port,
-                  local_port=port, udp_port=udp_port)
+                  local_port=port, udp_port=udp_port, portal_origin=RUNTIME_CONFIG.get('portalOrigin', 'https://techexplore.us'))
         return {"hostId": str(host_key), "port": port}
 
 
@@ -422,7 +496,10 @@ def sync(root: Path) -> None:
 
     manifest_hash = hashlib.sha256(dashboard_path.read_bytes()).hexdigest()
     manifest_marker = root / ".manifest-published"
-    if not manifest_marker.exists() or manifest_marker.read_text() != manifest_hash:
+    if RUNTIME_CONFIG:
+        _host_request('manifest', {route: item for route, item in dashboard.items() if item.get('enabled')})
+        manifest_marker.write_text(manifest_hash)
+    elif not manifest_marker.exists() or manifest_marker.read_text() != manifest_hash:
         subprocess.run(["scp", "-q", *SSH_OPTIONS, str(dashboard_path),
                         "kvm2:/opt/blobe-vm/private/direct-streams.json.new"],
                        capture_output=True, check=True, timeout=30)
@@ -435,16 +512,21 @@ def sync(root: Path) -> None:
     _start_gateway(root)
     try:
         _ensure_local_gateway(root)
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f'Local gateway will retry: {type(exc).__name__}', flush=True)
+    try:
+        _publish_local_gateway(root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f'Local metadata will retry: {type(exc).__name__}', flush=True)
     for route, record in routes.items():
         if record.get("enabled"):
             patch_audio_player(root / route / "static")
             patch_gamepad_input(root / route / "static")
-            patch_stream_navigation(root / route / "static")
-            patch_stream_recovery(root / route / "static")
+            patch_stream_navigation(root / route / "static", RUNTIME_CONFIG.get('portalOrigin', 'https://techexplore.us'))
+            patch_stream_recovery(root / route / "static", RUNTIME_CONFIG.get('portalOrigin', 'https://techexplore.us'))
             _start_instance(root, route, int(record["localPort"]))
-    _schedule_frame_probe(root, routes)
+    if not RUNTIME_CONFIG:
+        _schedule_frame_probe(root, routes)
 
 
 def _schedule_frame_probe(root: Path, routes: dict) -> None:

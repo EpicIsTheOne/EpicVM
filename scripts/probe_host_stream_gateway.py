@@ -18,7 +18,9 @@ prefix = '/EpicVM/auth' if base.startswith('https://') else ''
 instance_data = json.loads((Path(sys.argv[1]).parent / route / 'server' / 'data.json').read_text(encoding='utf-8'))
 host_id = next(iter(instance_data['hosts']))
 path = f"/EpicVM/{route}/stream.html?hostId={host_id}&appId=881448767"
-ticket = issue_grant(key, route=route, user="portal:probe", path=path)
+if '--grant-file' not in sys.argv:
+    raise SystemExit('A current portal-issued grant is required; pass --grant-file PATH. Synthetic legacy grants are intentionally rejected.')
+ticket = Path(sys.argv[sys.argv.index('--grant-file') + 1]).read_text(encoding='utf-8').strip()
 body = parse.urlencode({"grant": ticket}).encode()
 class NoRedirect(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -53,8 +55,9 @@ if prefix:
             assert str(payload['host']['host_id']) == str(host_id)
             assert str(payload['host'].get('paired', '')).lower() == 'paired'
 try:
-    other = "seat-f894baf2ef02de084011ce99" if route == "vm-astra-testmann" else "vm-astra-testmann"
-    request.urlopen(request.Request(base + (f"/EpicVM/{other}/" if prefix else "/authorize"),
+    routes = json.loads((Path(sys.argv[1]).parent / 'routes.json').read_text(encoding='utf-8'))
+    other = next(name for name, record in routes.items() if name != route and record.get('enabled'))
+    opener.open(request.Request(base + (f"/EpicVM/{other}/" if prefix else "/authorize"),
                                 headers={"Cookie": cookie, "X-Forwarded-Uri": f"/EpicVM/{other}/"}))
 except error.HTTPError as exc:
     assert exc.code == 401

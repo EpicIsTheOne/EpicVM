@@ -45,7 +45,8 @@ if [[ -z "$HOST_DOCKER_BIN" || ! -e "$HOST_DOCKER_BIN" ]]; then
   exit 1
 fi
 
-# Note: we always run the dashboard in direct mode now. If a proxy exists, you can still access it via IP:port.
+# Keep the backend private by default. Serve remote access through HTTPS;
+# DASHBOARD_BIND_ADDRESS explicitly opts into a different listener address.
 # If dashboard disabled, nothing to do
 if [[ "$ENABLE_DASHBOARD" -ne 1 ]]; then
   exit 0
@@ -200,7 +201,7 @@ fi
 
 docker run -d --name "$NAME" --init --restart unless-stopped \
   --env-file "$ENV_FILE" \
-  -p "${DASHBOARD_PORT}:5000" \
+  -p "${DASHBOARD_BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT}:5000" \
   "${NET_ARGS[@]}" \
   -v "$STATE_DIR:/opt/blobe-vm" \
   -v /opt/epicvm:/opt/epicvm \

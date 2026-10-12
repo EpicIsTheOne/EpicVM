@@ -1,8 +1,11 @@
 """Account self-service and a deliberately bounded admin workspace."""
+import os
 import base64
 import hashlib
 import hmac
 import json
+import re
+from datetime import datetime
 import secrets
 import time
 from functools import wraps
@@ -21,6 +24,10 @@ def register_account_workspace(app, core):
         core['_init_users_db']()
         with core['_users_conn']() as conn:
             conn.executescript('''
+                CREATE TABLE IF NOT EXISTS account_notification_reads (
+                    realm TEXT NOT NULL, username TEXT NOT NULL, notification_id TEXT NOT NULL,
+                    read_at INTEGER NOT NULL, PRIMARY KEY(realm, username, notification_id)
+                );
                 CREATE TABLE IF NOT EXISTS account_admin_passwords (
                     username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1
@@ -34,6 +41,46 @@ def register_account_workspace(app, core):
                     UNIQUE(realm, username, request_key)
                 );
             ''')
+            if 'context' not in {row['name'] for row in conn.execute('PRAGMA table_info(account_tickets)')}:
+                conn.execute("ALTER TABLE account_tickets ADD COLUMN context TEXT")
+        if core.get('_host_desktop_grants_init'):
+            core['_host_desktop_grants_init']()
+
+    def ticket_record(row):
+        item = dict(row)
+        item['context'] = json.loads(item.get('context') or '{}')
+        if item['kind'] == 'desktop':
+            with core['_users_conn']() as conn:
+                item['desktopAssigned'] = bool(desktop_assignment(conn, item))
+        return item
+
+    def desktop_assignment(conn, ticket):
+        if ticket['realm'] != 'portal':
+            return None
+        return conn.execute('''SELECT d.host_id FROM host_desktop_grants d JOIN users u ON u.username=d.username
+            WHERE d.realm='portal' AND d.username=? AND u.account_status='approved' AND u.disabled=0
+            ORDER BY d.host_id LIMIT 1''', (ticket['username'],)).fetchone()
+
+    def report_context(value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict) or len(json.dumps(value)) > 2048:
+            raise ValueError('Invalid connection details.')
+        result = {}
+        if isinstance(value.get('host'), str) and re.fullmatch(r'[a-zA-Z0-9._-]{1,128}', value['host']):
+            result['host'] = value['host']
+        for key, allowed in [('connection', ('local', 'internet')), ('source', ('launch', 'recovery')),
+                             ('stage', ('preparing', 'windows', 'stream', 'pairing', 'checking', 'recovery'))]:
+            if value.get(key) in allowed:
+                result[key] = value[key]
+        stamp = value.get('time')
+        if isinstance(stamp, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T[\d:.]+Z', stamp):
+            try:
+                datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+                result['time'] = stamp
+            except ValueError:
+                pass
+        return result
 
     def admin_record(username):
         init()
@@ -135,6 +182,11 @@ def register_account_workspace(app, core):
     except ImportError:
         from epi_agent import register_epi_agent
     register_epi_agent(app, core, guard, data)
+    try:
+        from .host_enrollment import register_host_enrollment
+    except ImportError:
+        from host_enrollment import register_host_enrollment
+    register_host_enrollment(app, core, guard, data)
 
     def jev_response():
         payload = data()
@@ -200,7 +252,7 @@ def register_account_workspace(app, core):
         identity = actor()
         if not identity:
             return jsonify(ok=False, authenticated=False), 401
-        return jsonify(ok=True, authenticated=True, user=identity, csrfToken=csrf(identity))
+        return jsonify(ok=True, authenticated=True, user=identity, csrfToken=csrf(identity), hostingProfile=os.environ.get('EPICVM_HOSTING_PROFILE','combined'))
 
     @app.post('/EpicVM/api/account/password')
     @guard()
@@ -237,6 +289,65 @@ def register_account_workspace(app, core):
             core['_LOGIN_ATTEMPTS'].pop(key, None)
         return refresh_cookie(jsonify(ok=True, message='Password updated. Other sessions have been signed out.'), identity)
 
+    def notifications_for(who):
+        items = []
+        def add(key, version, title, target, stamp=0, category='account'):
+            notification_id = hashlib.sha256(json.dumps([key, version], sort_keys=True).encode()).hexdigest()
+            items.append(dict(id=notification_id, title=title, target=target, createdAt=stamp, category=category))
+        with core['_users_conn']() as conn:
+            tickets = conn.execute('SELECT * FROM account_tickets WHERE realm=? AND username=?',
+                                   (who['realm'], who['username'])).fetchall()
+            for t in tickets:
+                if t['reviewer']:
+                    add('reply:' + t['id'], [t['updated_at'], t['status'], t['response']],
+                        'Update: ' + t['title'], '/settings#request-' + t['id'], t['updated_at'], 'reply')
+            if who['realm'] == 'portal':
+                user = core['_get_user_by_username'](who['username'])
+                if user and user.get('accountStatus') == 'approved':
+                    add('approval', user['id'], 'Your EpicVM account is approved', '/portal')
+                    for d in conn.execute("SELECT host_id FROM host_desktop_grants WHERE realm='portal' AND username=?", (who['username'],)):
+                        add('desktop:' + d['host_id'], user['id'], 'Desktop access assigned: ' + d['host_id'], '/portal', category='assignment')
+                    for resource in user.get('assignedResources') or []:
+                        add('resource:' + resource['resourceKey'], user['id'], 'Machine assigned: ' + resource['name'], '/portal', category='assignment')
+            if who['isAdmin']:
+                for t in conn.execute('SELECT * FROM account_tickets'):
+                    category = 'requests' if t['kind'] in ('desktop', 'vm') else 'reports'
+                    add('incoming:' + t['id'], t['created_at'], t['username'] + ': ' + t['title'],
+                        '/Management?section=' + category + '#request-' + t['id'], t['created_at'], category)
+                    items[-1]['state'] = t['status']
+                for u in conn.execute("SELECT username, id, created_at FROM users WHERE account_status='pending' AND disabled=0"):
+                    add('signup:' + str(u['id']), u['created_at'], 'Account approval requested: ' + u['username'],
+                        '/Management?section=accounts#account-' + str(u['id']), u['created_at'], 'accounts')
+                for r in conn.execute("SELECT * FROM access_requests WHERE status='pending'"):
+                    add('access:' + str(r['id']), r['created_at'], 'Machine access requested: ' + r['username'],
+                        '/Management?section=requests#access-' + str(r['id']), r['created_at'], 'requests')
+            read_ids = {r[0] for r in conn.execute('SELECT notification_id FROM account_notification_reads WHERE realm=? AND username=?',
+                                                   (who['realm'], who['username']))}
+        for item in items:
+            item['read'] = item['id'] in read_ids
+        return sorted(items, key=lambda item: (item['read'], -item['createdAt'], item['id']))
+
+    @app.get('/EpicVM/api/account/notifications')
+    @guard()
+    def account_notifications():
+        items = notifications_for(g.account_actor)
+        return jsonify(ok=True, notifications=items[:100], unreadCount=sum(not item['read'] for item in items))
+
+    @app.post('/EpicVM/api/account/notifications/read')
+    @guard()
+    def notification_read():
+        who, payload = g.account_actor, data()
+        ids = payload.get('ids')
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or not all(isinstance(i, str) for i in ids):
+            raise ValueError('Choose up to 100 notifications.')
+        available = {item['id'] for item in notifications_for(who)}
+        if not set(ids) <= available:
+            return jsonify(ok=False, error='Notification not found.'), 404
+        with core['_users_conn']() as conn:
+            conn.executemany('INSERT OR IGNORE INTO account_notification_reads VALUES(?,?,?,?)',
+                             [(who['realm'], who['username'], i, int(time.time())) for i in set(ids)])
+        return jsonify(ok=True)
+
     @app.get('/EpicVM/api/account/tickets')
     @guard()
     def account_tickets():
@@ -244,31 +355,38 @@ def register_account_workspace(app, core):
         with core['_users_conn']() as conn:
             rows = conn.execute('SELECT * FROM account_tickets WHERE realm=? AND username=? ORDER BY created_at DESC',
                                 (who['realm'], who['username'])).fetchall()
-        return jsonify(ok=True, tickets=[dict(row) for row in rows])
+        return jsonify(ok=True, tickets=[ticket_record(row) for row in rows])
 
     @app.post('/EpicVM/api/account/tickets')
     @guard()
     def account_ticket_create():
         who, payload = g.account_actor, data()
         kind = payload.get('kind')
-        if kind not in ('vm', 'feedback', 'bug'):
-            raise ValueError('Choose VM request, feedback, or bug report.')
+        if kind not in ('desktop', 'vm', 'feedback', 'bug'):
+            raise ValueError('Choose desktop access, VM request, feedback, or bug report.')
         title = text_field(payload, 'title', 120)
         body = text_field(payload, 'body', 6000, 5)
         request_key = text_field(payload, 'requestKey', 100)
+        context = report_context(payload.get('context')) if kind == 'bug' else {}
         with core['_users_conn']() as conn:
             conn.execute('BEGIN IMMEDIATE')
             existing = conn.execute('SELECT id FROM account_tickets WHERE realm=? AND username=? AND request_key=?',
                                     (who['realm'], who['username'], request_key)).fetchone()
             if existing:
                 return jsonify(ok=True, id=existing['id'])
+            if kind == 'desktop':
+                existing = conn.execute("""SELECT id FROM account_tickets WHERE realm=? AND username=? AND kind='desktop'
+                    AND status IN ('pending','in_review') ORDER BY created_at DESC LIMIT 1""",
+                    (who['realm'], who['username'])).fetchone()
+                if existing:
+                    return jsonify(ok=True, id=existing['id'])
             recent = conn.execute('SELECT COUNT(*) FROM account_tickets WHERE realm=? AND username=? AND created_at>?',
                                   (who['realm'], who['username'], int(time.time()) - 3600)).fetchone()[0]
             if recent >= 10:
                 return jsonify(ok=False, error='You can submit up to 10 requests or reports per hour.'), 429
             ticket_id, now = secrets.token_hex(12), int(time.time())
-            conn.execute('''INSERT INTO account_tickets(id,realm,username,kind,title,body,created_at,updated_at,request_key)
-                            VALUES(?,?,?,?,?,?,?,?,?)''', (ticket_id, who['realm'], who['username'], kind, title, body, now, now, request_key))
+            conn.execute('''INSERT INTO account_tickets(id,realm,username,kind,title,body,created_at,updated_at,request_key,context)
+                            VALUES(?,?,?,?,?,?,?,?,?,?)''', (ticket_id, who['realm'], who['username'], kind, title, body, now, now, request_key, json.dumps(context)))
         return jsonify(ok=True, id=ticket_id), 201
 
     @app.get('/EpicVM/api/management/overview')
@@ -277,7 +395,7 @@ def register_account_workspace(app, core):
         # Reuse the parity inventory/grant contract, behind this narrower gate.
         result = core['dashboard_users_list'].__wrapped__().get_json()
         with core['_users_conn']() as conn:
-            result['tickets'] = [dict(row) for row in conn.execute('SELECT * FROM account_tickets ORDER BY created_at DESC')]
+            result['tickets'] = [ticket_record(row) for row in conn.execute('SELECT * FROM account_tickets ORDER BY created_at DESC')]
             # The focused workspace must not hide pending access requests behind
             # the full dashboard's paginated history.
             result['requests'] = [dict(row) for row in conn.execute('SELECT * FROM access_requests ORDER BY created_at DESC')]
@@ -456,6 +574,8 @@ def register_account_workspace(app, core):
         if ticket['kind'] == 'vm' and status == 'resolved' or ticket['kind'] != 'vm' and status == 'fulfilled':
             raise ValueError('Choose a status appropriate for this request type.')
         resource = None
+        if ticket['kind'] == 'desktop' and status == 'resolved':
+            core['_host_desktop_grants_init']()
         if ticket['kind'] == 'vm' and status == 'fulfilled':
             key = text_field(payload, 'resourceKey', 512)
             resources, _ = core['_resource_inventory']()
@@ -468,6 +588,8 @@ def register_account_workspace(app, core):
             current = conn.execute('SELECT * FROM account_tickets WHERE id=?', (ticket_id,)).fetchone()
             if current['status'] in ('fulfilled', 'declined', 'resolved'):
                 return jsonify(ok=False, error='This request is already closed.'), 409
+            if current['kind'] == 'desktop' and status == 'resolved' and not desktop_assignment(conn, current):
+                raise ValueError('Assign a desktop to this approved, enabled EpicVM account before marking access ready. You can keep it under review or decline it instead.')
             if resource and ticket['realm'] == 'portal':
                 user = conn.execute('SELECT * FROM users WHERE username=?', (ticket['username'],)).fetchone()
                 if not user or user['disabled'] or user['account_status'] != 'approved':

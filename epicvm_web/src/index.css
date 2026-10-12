@@ -1083,4 +1083,7 @@ body {
 .evm-end-dialog::backdrop{background:rgba(0,0,0,.7)}
 .evm-end-dialog h2{margin-top:0;font-size:22px}
 .evm-end-dialog p{line-height:1.6}
+.evm-end-dialog label{display:grid;gap:8px;margin:18px 0;font-weight:600}
+.evm-end-dialog input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #345362;border-radius:8px;background:#07151e;color:#e0f1f8;font:inherit}
+.evm-end-dialog input:focus-visible{outline:2px solid #00b9e6;outline-offset:2px}
 .evm-library-button:focus-visible,.evm-library-button-secondary:focus-visible,.evm-own-pc summary:focus-visible{outline:3px solid #8cdff5;outline-offset:3px}

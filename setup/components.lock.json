@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "architecture": "x64",
+  "components": [
+    {
+      "id": "multiseat",
+      "version": "0.6.7",
+      "kind": "zip",
+      "file": "multiseat-windows-x64.zip",
+      "url": "https://github.com/vibesoftwarecoder/MultiSeat/releases/download/v0.6.7/multiseat-windows-x64.zip",
+      "sha256": "319633cc3152204879b81ceafb67f46345961be5cf693a43058a0d8c65f1b01a"
+    },
+    {
+      "id": "apollo",
+      "version": "2026.6.1-ms6",
+      "kind": "zip",
+      "file": "apollovibe-windows-x64.zip",
+      "url": "https://github.com/vibesoftwarecoder/ApolloVibe/releases/download/v2026.6.1-ms6/apollovibe-windows-x64.zip",
+      "sha256": "b39bdc299988a712fbf5dad68c0847e05e65baf733b55194297c6b2c9374ad5c"
+    },
+    {
+      "id": "vigem",
+      "version": "1.22.0",
+      "kind": "installer",
+      "file": "ViGEmBus_1.22.0_x64_x86_arm64.exe",
+      "url": "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe",
+      "sha256": "89220a7865076b342892f98865f3499fb7c4cfd673159e89d352c360fd014c6a",
+      "publisher": "Nefarius Software Solutions"
+    },
+    {
+      "id": "hidhide",
+      "version": "1.5.230",
+      "kind": "installer",
+      "file": "HidHide_1.5.230_x64.exe",
+      "url": "https://github.com/nefarius/HidHide/releases/download/v1.5.230.0/HidHide_1.5.230_x64.exe",
+      "sha256": "f4bbbcb82e6258641b887c74bc81c4c5f66e4aa811808dfc304347687b7605f6",
+      "publisher": "Nefarius Software Solutions"
+    },
+    {
+      "id": "sudovda-source",
+      "version": "Apollo-0.4.6",
+      "kind": "extract",
+      "file": "Apollo-0.4.6.exe",
+      "url": "https://github.com/ClassicOldSong/Apollo/releases/download/v0.4.6/Apollo-0.4.6.exe",
+      "sha256": "42b2aefaacb3474511517a56b96ee9f0517f30ac38b5dd2fda9fd5b478f5021a"
+    }
+  ]
+}

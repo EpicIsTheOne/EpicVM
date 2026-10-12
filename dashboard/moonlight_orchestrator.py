@@ -58,6 +58,8 @@ def validate_vm_name(name: str) -> str:
 
 def validate_guest_ip(address: str) -> str:
     value = str(address or "").strip()
+    if os.environ.get('EPICVM_ALLOW_LOOPBACK_HOST') == '1' and value == '127.0.0.1':
+        return value
     if not TAILSCALE_IP_RE.fullmatch(value):
         raise ConsoleOrchestrationError("The guest address is outside the tailnet range.", status=422, code="invalid_guest_ip")
     try:
@@ -900,25 +902,31 @@ networks:
         headers = {"Content-Type": "application/json", "X-EpicVM-User": user}
         body = json.dumps({"host_id": host_id}, separators=(",", ":")).encode("utf-8")
         try:
-            response = self._http("POST", base + "/api/pair", headers=headers, body=body, timeout=120)
-            try:
-                first = self._json_line(response)
-                pin = str(first.get("Pin") or "") if isinstance(first, dict) else ""
-                if not pin:
-                    raise ConsoleOrchestrationError("Moonlight did not provide a pairing PIN.", status=502, code="moonlight_pair_failed")
-                if pin_submitter is not None:
-                    pin_submitter(pin)
-                else:
-                    self._sunshine_pair(str(plan["guestIp"]), str(sunshine_username), str(sunshine_password), pin, str(plan["name"]), sunshine_port)
-                second = self._json_line(response)
-                paired = isinstance(second, dict) and str(second.get("Paired") or "")
-                if not paired:
-                    raise ConsoleOrchestrationError("Moonlight did not confirm pairing.", status=502, code="moonlight_pair_failed")
-            finally:
+            for attempt in range(2):
+                response = self._http("POST", base + "/api/pair", headers=headers, body=body, timeout=120)
                 try:
-                    response.close()
-                except Exception:
-                    pass
+                    first = self._json_line(response)
+                    pin = str(first.get("Pin") or "") if isinstance(first, dict) else ""
+                    if not pin:
+                        raise ConsoleOrchestrationError("Moonlight did not provide a pairing PIN.", status=502, code="moonlight_pair_failed")
+                    if pin_submitter is not None:
+                        pin_submitter(pin)
+                    else:
+                        self._sunshine_pair(str(plan["guestIp"]), str(sunshine_username), str(sunshine_password), pin, str(plan["name"]), sunshine_port)
+                    second = self._json_line(response)
+                    paired = isinstance(second, dict) and bool(second.get("Paired"))
+                    if paired:
+                        break
+                    # Apollo clears an invalid pending handshake when it rejects
+                    # an out-of-order request. Start a new handshake with a fresh
+                    # PIN once, rather than resubmitting the previous PIN.
+                    if attempt == 1 or not isinstance(second, dict) or "Error" not in second:
+                        raise ConsoleOrchestrationError("Moonlight did not confirm pairing.", status=502, code="moonlight_pair_failed")
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
         except ConsoleOrchestrationError:
             raise
         except urlerror.HTTPError as exc:

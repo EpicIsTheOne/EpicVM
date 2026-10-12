@@ -7,15 +7,23 @@ import json
 import re
 from pathlib import Path
 import shutil
+import os
+from urllib.parse import urlsplit
 
 
-def patch_stream_navigation(static: Path) -> bool:
+def patch_stream_navigation(static: Path, portal_origin: str = 'https://techexplore.us') -> bool:
     """Return EpicVM streams to the portal even when stream teardown fails."""
+    parsed = urlsplit(portal_origin)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.path not in ('', '/') or parsed.username or parsed.query or parsed.fragment:
+        raise ValueError('Invalid configured portal origin')
+    destination = portal_origin.rstrip('/') + '/EpicVM/portal'
     path = static / "stream.js"
     text = path.read_text(encoding="utf-8")
     marker = '// EpicVM workspace navigation'
     if marker in text:
-        return False
+        updated = re.sub(r'window\.location\.assign\("https://[^" ]+/EpicVM/portal"\);', lambda _: 'window.location.assign(' + json.dumps(destination) + ');', text)
+        if updated != text: path.write_text(updated, encoding='utf-8')
+        return updated != text
     pattern = r'        // Close stream\r?\n.*?        this\.buttonDiv\.appendChild\(this\.exitStreamButton\);'
     replacement = '''        // EpicVM workspace navigation
         this.exitStreamButton.innerText = "Back to workspace";
@@ -34,6 +42,7 @@ def patch_stream_navigation(static: Path) -> bool:
             }
         });
         this.buttonDiv.appendChild(this.exitStreamButton);'''
+    replacement = replacement.replace('https://techexplore.us/EpicVM/portal', destination)
     text, count = re.subn(pattern, lambda _: replacement, text, flags=re.DOTALL)
     if count != 1:
         raise RuntimeError("Pinned Moonlight exit control layout changed")
@@ -41,7 +50,7 @@ def patch_stream_navigation(static: Path) -> bool:
     return True
 
 
-def patch_stream_recovery(static: Path) -> bool:
+def patch_stream_recovery(static: Path, portal_origin: str = 'https://techexplore.us') -> bool:
     """Install bounded recovery on the pinned host-local viewer."""
     path = static / 'stream.js'
     text = path.read_text(encoding='utf-8')
@@ -53,7 +62,7 @@ def patch_stream_recovery(static: Path) -> bool:
         if text.count(anchor) != 1 or text.count(old_stop) != 1:
             raise RuntimeError('Pinned Moonlight reconnect layout changed')
         text = text.replace(anchor, anchor + '\n        ' + marker + '\n        installStreamRecovery(app);')
-        text = 'import { installStreamRecovery } from "./epicvm_recovery.js?v=1";\n' + text
+        text = 'import { installStreamRecovery } from "./epicvm_recovery.js?v=2";\n' + text
         text = text.replace(old_stop, '''                const stopped = yield Promise.race([
                     Promise.resolve().then(() => oldStream.stop()).catch(() => false),
                     new Promise(resolve => setTimeout(() => resolve(false), 3000))
@@ -68,15 +77,22 @@ def patch_stream_recovery(static: Path) -> bool:
                 }''')
         path.write_text(text, encoding='utf-8')
         changed = True
-    source = Path(__file__).with_name('stream_recovery.js').read_text(encoding='utf-8')
+    parsed = urlsplit(portal_origin)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.path not in ('', '/') or parsed.username or parsed.query or parsed.fragment:
+        raise ValueError('Invalid configured portal origin')
+    source = Path(__file__).with_name('stream_recovery.js').read_text(encoding='utf-8').replace('https://techexplore.us/EpicVM/', portal_origin.rstrip('/') + '/EpicVM/')
     network_import = 'import { installStreamNetwork } from "./epicvm_network.js?v=1";'
     text = path.read_text(encoding='utf-8')
+    if './epicvm_recovery.js?v=1' in text:
+        text = text.replace('./epicvm_recovery.js?v=1', './epicvm_recovery.js?v=2')
+        path.write_text(text, encoding='utf-8')
+        changed = True
     if network_import not in text:
         text = network_import + '\n' + text.replace('        installStreamRecovery(app);', '        installStreamRecovery(app);\n        installStreamNetwork(app);')
         path.write_text(text, encoding='utf-8')
         changed = True
     network = static / 'epicvm_network.js'
-    network_source = Path(__file__).with_name('stream_network.js').read_text(encoding='utf-8')
+    network_source = Path(__file__).with_name('stream_network.js').read_text(encoding='utf-8').replace('https://techexplore.us/EpicVM/', portal_origin.rstrip('/') + '/EpicVM/')
     if not network.exists() or network.read_text(encoding='utf-8') != network_source:
         network.write_text(network_source, encoding='utf-8')
         changed = True
@@ -148,7 +164,7 @@ def patch_gamepad_input(static: Path) -> bool:
 
 def provision(*, source_data: Path, template_config: Path, package: Path,
               root: Path, route: str, address: str, sunshine_port: int,
-              local_port: int, udp_port: int) -> None:
+              local_port: int, udp_port: int, portal_origin: str = 'https://techexplore.us') -> None:
     if not route.startswith(("seat-", "vm-")) or not all(c.isalnum() or c in "-._" for c in route):
         raise ValueError("Invalid route")
     if not (1000 <= sunshine_port <= 65534 and 1024 <= local_port <= 65535
@@ -193,8 +209,10 @@ def provision(*, source_data: Path, template_config: Path, package: Path,
     shutil.copytree(package / "static", target / "static")
     patch_audio_player(target / "static")
     patch_gamepad_input(target / "static")
-    patch_stream_navigation(target / "static")
-    patch_stream_recovery(target / "static")
+    patch_stream_navigation(target / "static", portal_origin)
+    patch_stream_recovery(target / "static", portal_origin)
+    module = target / 'static' / 'epicvm_recovery.js'
+    module.write_text(module.read_text(encoding='utf-8').replace('https://techexplore.us/EpicVM/', portal_origin.rstrip('/') + '/EpicVM/'), encoding='utf-8')
     shutil.copy2(package / "streamer.exe", target / "streamer.exe")
     settings = target / "static" / "default_settings.js"
     text = settings.read_text(encoding="utf-8")

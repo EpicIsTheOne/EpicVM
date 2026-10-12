@@ -26,7 +26,8 @@ export function installStreamNetwork(app) {
     app.epicvmNetwork = true;
     const panel = document.createElement('aside');
     panel.id = 'epicvm-network';
-    panel.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:9000;background:#071117;color:#e7f0f4;padding:12px;border:1px solid #29404a;border-radius:6px;font:14px sans-serif;max-width:calc(100vw - 48px)';
+    panel.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:9000;background:#071117;color:#e7f0f4;padding:12px;border:1px solid #29404a;border-radius:6px;font:14px sans-serif;max-width:calc(100vw - 48px)';
+    panel.hidden = true;
     const status = document.createElement('span');
     status.textContent = 'Checking video connection';
     status.setAttribute('role', 'status');
@@ -41,7 +42,14 @@ export function installStreamNetwork(app) {
     }
     document.body.append(panel);
     let disposed = false, sampling = false;
+    const syncVisibility = () => {
+        panel.hidden = !app.getStream()?.getStats()?.isEnabled();
+    };
+    // The existing Stats button toggles synchronously before the click bubbles.
+    document.addEventListener('click', syncVisibility);
     const timer = setInterval(async () => {
+        syncVisibility();
+        if (panel.hidden) return;
         if (sampling || disposed) return;
         const stream = app.getStream();
         const peer = stream?.transport?.peer;
@@ -59,5 +67,5 @@ export function installStreamNetwork(app) {
         } catch { if (!disposed) status.textContent = 'Video connection unavailable'; }
         finally { sampling = false; }
     }, 2000);
-    window.addEventListener('pagehide', () => { disposed = true; clearInterval(timer); panel.remove(); }, { once: true });
+    window.addEventListener('pagehide', () => { disposed = true; clearInterval(timer); document.removeEventListener('click', syncVisibility); panel.remove(); }, { once: true });
 }

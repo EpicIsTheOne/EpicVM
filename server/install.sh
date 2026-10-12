@@ -1378,7 +1378,7 @@ deploy_dashboard_direct() {
   docker pull python:3.11-slim
   docker run -d --name blobedash --init --restart unless-stopped \
     --env-file /opt/blobe-vm/.env \
-    -p "${DASHBOARD_PORT}:5000" \
+    -p "${DASHBOARD_BIND_ADDRESS:-127.0.0.1}:${DASHBOARD_PORT}:5000" \
     -v /opt/blobe-vm:/opt/blobe-vm \
     -v /opt/epicvm:/opt/epicvm \
     -v /usr/local/bin/epicvm:/usr/local/bin/epicvm:ro \
@@ -1402,7 +1402,7 @@ deploy_dashboard_direct() {
     -e EPICVM_MOONLIGHT_IMAGE="${EPICVM_MOONLIGHT_IMAGE:-}" \
     -e EPICVM_MOONLIGHT_NAT_HOST="${EPICVM_MOONLIGHT_NAT_HOST:-}" \
   python:3.11-slim \
-  bash -c "apt-get update && apt-get install -y curl jq && pip install --no-cache-dir flask==3.1.1 cryptography==46.0.3 gunicorn==26.2.0 && gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 4 --timeout 60 --access-logfile - --error-logfile - wsgi:app" \
+  bash -c "apt-get update && apt-get install -y curl jq && pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==83.0.0 && pip install --no-cache-dir Werkzeug==3.1.9 flask==3.1.3 cryptography==50.0.0 gunicorn==26.2.0 && gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 4 --timeout 60 --access-logfile - --error-logfile - wsgi:app" \
     >/dev/null
 }
 

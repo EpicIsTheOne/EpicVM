@@ -4,6 +4,7 @@ import { User, Lock, ArrowRight } from '@phosphor-icons/react'
 import { login } from '../api'
 import AuthShell from '../components/AuthShell'
 import { signInDestination } from '../session'
+import { reportDestination } from '../supportContext'
 
 export default function Signin({ setUser }) {
   const navigate = useNavigate()
@@ -24,7 +25,8 @@ export default function Signin({ setUser }) {
         setUser(u)
         // Already-approved, returning users go straight to the portal.
         if ((u.accountStatus || 'pending') === 'approved') {
-          navigate(signInDestination(location.state?.from), { replace: true })
+          const destination = signInDestination(location.state?.from)
+          navigate(destination === '/settings' && location.state?.reportContext ? reportDestination(location.state.reportContext) : destination, { replace: true })
         } else {
           navigate('/pending')
         }

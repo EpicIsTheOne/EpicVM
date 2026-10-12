@@ -21,7 +21,7 @@ def _unb64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def issue_grant(key: bytes, *, route: str, user: str, path: str, now: int | None = None) -> str:
+def issue_grant(key: bytes, *, route: str, user: str, path: str, revision: str | None = None, now: int | None = None) -> str:
     if not ROUTE_RE.fullmatch(route):
         raise ValueError("Invalid stream route")
     if not user or len(user) > 128 or not re.fullmatch(r"[a-zA-Z0-9_.:@-]+", user):
@@ -31,6 +31,8 @@ def issue_grant(key: bytes, *, route: str, user: str, path: str, now: int | None
     timestamp = int(time.time() if now is None else now)
     payload = {"v": 1, "route": route, "sub": user, "path": path,
                "iat": timestamp, "exp": timestamp + 60, "jti": secrets.token_hex(16)}
+    if revision is not None:
+        payload['revision'] = revision
     encoded = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     signature = _b64(hmac.digest(key, encoded.encode(), hashlib.sha256))
     return encoded + "." + signature
@@ -63,6 +65,8 @@ def issue_session(key: bytes, grant: dict, *, now: int | None = None) -> str:
     timestamp = int(time.time() if now is None else now)
     payload = {"v": 1, "kind": "session", "route": grant["route"],
                "sub": grant["sub"], "iat": timestamp, "exp": timestamp + 8 * 3600}
+    if 'revision' in grant:
+        payload['revision'] = grant['revision']
     encoded = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     return encoded + "." + _b64(hmac.digest(key, encoded.encode(), hashlib.sha256))
 

@@ -1,0 +1,3 @@
+{$EPICVM_PORTAL_HOST} {
+    reverse_proxy portal:5050
+}

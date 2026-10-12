@@ -310,7 +310,8 @@ def test_internal_api_url_includes_configured_vm_prefix(tmp_path):
     assert orch._container_url("alpha") == "http://172.20.0.2:8080/vm/alpha"
 
 
-def test_pairing_keeps_sunshine_secret_out_of_bundle(tmp_path):
+@pytest.mark.parametrize('rejected_first', [False, True])
+def test_pairing_keeps_sunshine_secret_out_of_bundle(tmp_path, rejected_first):
     calls = []
 
     class Response:
@@ -336,6 +337,8 @@ def test_pairing_keeps_sunshine_secret_out_of_bundle(tmp_path):
         if "/api/host?" in url or url.endswith("/api/host"):
             return Response(payload=json.dumps({"host": {"host_id": "1251941260"}}).encode())
         if url.endswith("/api/pair"):
+            if rejected_first and sum(call[1].endswith('/api/pair') for call in calls) == 1:
+                return Response([json.dumps({"Pin": "5678"}), json.dumps({"Error": "Out of order handshake"})])
             return Response([json.dumps({"Pin": "1234"}), json.dumps({"Paired": "Paired"})])
         if url.endswith("/api/pin"):
             return Response(payload=b'{"status":true}')
@@ -346,6 +349,9 @@ def test_pairing_keeps_sunshine_secret_out_of_bundle(tmp_path):
     orch._container_url = lambda _name, _route_prefix=None: "http://172.20.0.2:8080/vm/alpha"
     result = orch.pair_staged("alpha", sunshine_username="sunshine-user", sunshine_password="secret-value")
     assert result["paired"] is True
+    assert sum(call[1].endswith('/api/pair') for call in calls) == (2 if rejected_first else 1)
+    pins = [json.loads(call[3])["pin"] for call in calls if call[1].endswith('/api/pin')]
+    assert pins == (["5678", "1234"] if rejected_first else ["1234"])
     pair = next(call for call in calls if call[1].endswith("/api/pair"))
     pair_payload = json.loads(pair[3].decode())
     assert isinstance(pair_payload["host_id"], int)
@@ -358,6 +364,37 @@ def test_pairing_keeps_sunshine_secret_out_of_bundle(tmp_path):
     assert sunshine[2]["Authorization"].startswith("Basic ")
     assert json.loads(sunshine[3].decode())["name"] == "EpicVMWeb"
     assert json.loads((tmp_path / "alpha" / "plan.json").read_text())["paired"] is True
+
+
+def test_pairing_rejection_retry_is_bounded_and_keeps_plan_unpaired(tmp_path):
+    attempts = []
+    closed = []
+    pins = []
+
+    class Response:
+        def __init__(self, pin):
+            self.lines = [json.dumps({'Pin': pin}).encode(), b'{"Error":"handshake rejected"}']
+
+        def readline(self):
+            return self.lines.pop(0)
+
+        def close(self):
+            closed.append(True)
+
+    def http(*args, **kwargs):
+        attempts.append(True)
+        return Response('1234' if len(attempts) == 1 else '5678')
+
+    orch = make_orchestrator(tmp_path, http_request=http)
+    orch.stage_plan(orch.build_plan(name='alpha', guest_ip='100.111.82.1'))
+    orch._container_url = lambda *args: 'http://test/vm/alpha'
+    orch._register_host = lambda *args: 1251941260
+    orch._host_details = lambda *args, **kwargs: pytest.fail('Rejected pairing was verified')
+    with pytest.raises(ConsoleOrchestrationError, match='did not confirm pairing'):
+        orch.pair_staged('alpha', pin_submitter=pins.append)
+    assert len(attempts) == len(closed) == 2
+    assert pins == ['1234', '5678']
+    assert json.loads((tmp_path / 'alpha/plan.json').read_text())['paired'] is False
 
 
 def test_pairing_refuses_to_mark_plan_ready_when_authenticated_host_query_fails(tmp_path):

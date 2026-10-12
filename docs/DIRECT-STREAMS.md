@@ -116,3 +116,26 @@ comparison is still required before claiming a latency improvement.
 
 The same candidate-pair RTT measurement is used on both paths. WebSocket
 fallback displays the streamer's browser RTT when reported, or RTT unavailable.
+
+## Stream access revocation
+
+The host gateway validates portal-issued grants and sessions against the portal
+authority. Password changes, disabled/rejected/deleted accounts, removed resource
+access and administrator credential changes invalidate existing stream access.
+HTTP authorization uses a two-second lease; active sessions are checked every
+five seconds. Denial closes the affected viewer process and its transports.
+The supervisor restarts the viewer for a fresh authorized connection, preserving
+the Windows desktop and apps. Multiple clients on that resource disconnect
+together. Portal validation outages fail closed, including for LAN streams.
+
+Session tracking persists in the private nonce database. Keep that database and
+its directory restricted to the host operator, SYSTEM and Administrators.
+Deploy `dashboard/direct_stream.py`, `dashboard/direct_stream_auth.py` and the
+host copies of `host_stream_gateway.py`/`direct_stream_auth.py` together. Restart
+the gateway and enabled viewer processes once when upgrading from the legacy
+version, because existing transports were not tracked. Preserve Windows seats.
+
+The default authority is `https://techexplore.us/EpicVM/api/stream/validate`;
+alternate deployments must configure `--authority` with their trusted HTTPS
+portal. The probe requires `--grant-file PATH` containing a fresh grant issued
+with the current account revision. Keep the file private and remove it afterward.

@@ -26,3 +26,16 @@ __pycache__/
 
 # build/deps
 node_modules/
+/artifacts/host/
+# Generated local TLS test CA private state.
+docs/verification/lan-storage-live/lan-certificates/
+
+# Local release contexts, deployment snapshots and test evidence.
+/*-build-*/
+/*-deploy-*/
+/docs/verification/
+/recovery-evidence/
+/controller_gate.exp
+/controller_gate.lib
+/testResults.xml
+/-w

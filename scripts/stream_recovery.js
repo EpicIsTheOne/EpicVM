@@ -104,6 +104,15 @@ export class StreamRecovery {
     dispose() { this.disposed = true; }
 }
 
+export function streamReportUrl(search, now = new Date()) {
+    const params = new URLSearchParams(search);
+    const context = new URLSearchParams({ report: 'bug', source: 'recovery', stage: 'recovery',
+        connection: params.get('connection') === 'local' ? 'local' : 'internet', time: now.toISOString() });
+    const host = params.get('epicvmHost');
+    if (/^[a-zA-Z0-9._-]{1,128}$/.test(host || '')) context.set('host', host);
+    return 'https://techexplore.us/EpicVM/settings?' + context;
+}
+
 export function installStreamRecovery(app) {
     if (app.epicvmRecovery) return app.epicvmRecovery;
     const panel = document.createElement('section');
@@ -121,7 +130,12 @@ export function installStreamRecovery(app) {
     back.textContent = 'Back to workspace';
     back.href = 'https://techexplore.us/EpicVM/portal';
     back.style.color = '#7ddfff';
-    panel.append(message, retry, back);
+    const report = document.createElement('a');
+    report.textContent = 'Report a problem';
+    report.target = '_blank';
+    report.rel = 'noopener noreferrer';
+    report.style.cssText = 'color:#7ddfff;display:inline-block;margin:8px 16px 0 0';
+    panel.append(message, retry, back, document.createElement('br'), report);
     document.body.append(panel);
     for (const event of ['keydown', 'keyup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click']) {
         panel.addEventListener(event, e => e.stopPropagation());
@@ -130,6 +144,12 @@ export function installStreamRecovery(app) {
         panel.hidden = !text;
         if (message.textContent !== text) message.textContent = text;
         retry.disabled = busy;
+        if (text && !report.dataset.reportTime) {
+            report.href = streamReportUrl(location.search);
+            report.dataset.reportTime = 'set';
+        } else if (!text) {
+            delete report.dataset.reportTime;
+        }
     });
     app.epicvmRecovery = recovery;
     retry.addEventListener('click', () => void recovery.retry(true));

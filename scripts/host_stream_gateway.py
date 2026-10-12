@@ -11,6 +11,8 @@ from pathlib import Path
 import sqlite3
 import sys
 import time
+import threading
+from urllib import request, error
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dashboard"))
@@ -23,15 +25,115 @@ class Gateway(ThreadingHTTPServer):
     request_queue_size = 256
     daemon_threads = True
 
-    def __init__(self, address, *, key_path: Path, routes_path: Path, nonces_path: Path):
+    def __init__(self, address, *, key_path: Path, routes_path: Path, nonces_path: Path,
+                 authority=None, disconnect=None):
         super().__init__(address, GatewayHandler)
         self.key = key_path.read_bytes()
         if len(self.key) < 32:
             raise ValueError("Stream signing key is too short")
         self.routes_path = routes_path
         self.nonces_path = nonces_path
+        self.authority = authority
+        self.disconnect = disconnect
+        self.sessions = {}
+        self.sessions_lock = threading.Lock()
+        self.validation_lock = threading.Lock()
+        self.validated = {}
+        self.monitor_stop = threading.Event()
+        self.connections = {}
         with sqlite3.connect(nonces_path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS used_grants (jti TEXT PRIMARY KEY, expires INTEGER NOT NULL)")
+            db.execute('CREATE TABLE IF NOT EXISTS stream_sessions (token TEXT PRIMARY KEY, route TEXT NOT NULL)')
+            if 'connection' not in {row[1] for row in db.execute('PRAGMA table_info(stream_sessions)')}:
+                db.execute("ALTER TABLE stream_sessions ADD COLUMN connection TEXT NOT NULL DEFAULT ''")
+            self.sessions = dict(db.execute('SELECT token, route FROM stream_sessions'))
+            self.connections = dict(db.execute('SELECT token, connection FROM stream_sessions'))
+        if authority:
+            threading.Thread(target=self._monitor, daemon=True).start()
+
+    def validate(self, route, token, *, fresh=False):
+        if not self.authority:
+            return True  # Explicit offline mode for isolated tests only.
+        # Coalesce parallel static-module requests under a short lease. This
+        # does not put a WAN request on the media/input path or each asset.
+        with self.validation_lock:
+            now = time.monotonic()
+            if not fresh and self.validated.get((route, token), 0) > now:
+                return True
+            body = json.dumps({'route': route, 'token': token}).encode()
+            try:
+                with request.urlopen(request.Request(self.authority, data=body,
+                                     headers={'Content-Type': 'application/json'}), timeout=3) as response:
+                    valid = response.status == 204
+            except (OSError, error.URLError):
+                valid = False
+            self.validated = {item: expiry for item, expiry in self.validated.items() if expiry > now}
+            if valid and len(self.validated) < 1024:
+                self.validated[(route, token)] = time.monotonic() + 2
+            else:
+                self.validated.pop((route, token), None)
+            return valid
+
+    def connection_allowed(self, connection):
+        policy_path = self.routes_path.parent / 'hosting-policy.json'
+        if not policy_path.exists():
+            return True
+        policy = json.loads(policy_path.read_text(encoding='utf-8-sig'))
+        local = self.routes_path.parent / 'local-gateway.json'
+        local_origin = json.loads(local.read_text(encoding='utf-8-sig')).get('origin', '') if local.exists() else ''
+        is_local = connection.lower() == urlsplit(local_origin).netloc.lower() and bool(connection)
+        return policy.get('localEnabled' if is_local else 'normalEnabled', True) is True
+
+    def remember(self, route, token, connection=''):
+        with self.sessions_lock:
+            # One resource may have several browser sessions. Bound memory and
+            # refuse further sessions rather than discard revocation tracking.
+            if token not in self.sessions and len(self.sessions) >= 1024:
+                return False
+            if token not in self.sessions:
+                with sqlite3.connect(self.nonces_path) as db:
+                    db.execute('INSERT OR IGNORE INTO stream_sessions (token, route, connection) VALUES (?, ?, ?)', (token, route, connection))
+            self.sessions[token] = route
+            if self.connections.get(token) != connection:
+                with sqlite3.connect(self.nonces_path) as db:
+                    db.execute('UPDATE stream_sessions SET connection = ? WHERE token = ?', (connection, token))
+            self.connections[token] = connection
+        return True
+
+    def check_sessions(self):
+        with self.sessions_lock:
+            sessions = list(self.sessions.items())
+        denied = set()
+        for token, route in sessions:
+            try:
+                verify_session(self.key, token, route=route)
+                valid = self.route(route) and self.connection_allowed(self.connections.get(token, '')) and self.validate(route, token, fresh=True)
+            except (OSError, ValueError):
+                valid = False
+            if not valid:
+                denied.add(route)
+        for route in denied:
+            # Closing the host viewer ends its WebRTC transports, including
+            # clients that ignore browser-side logout. Windows seats stay alive.
+            if self.disconnect:
+                self.disconnect(route)
+            with self.sessions_lock:
+                with sqlite3.connect(self.nonces_path) as db:
+                    db.execute('DELETE FROM stream_sessions WHERE route = ?', (route,))
+                self.sessions = {token: name for token, name in self.sessions.items() if name != route}
+                self.connections = {token: channel for token, channel in self.connections.items() if token in self.sessions}
+
+    def _monitor(self):
+        while not self.monitor_stop.wait(5):
+            try:
+                self.check_sessions()
+            except Exception:
+                # Retain tracking and retry if transport teardown fails.
+                pass
+
+    def server_close(self):
+        self.monitor_stop.set()
+        super().server_close()
 
     def route(self, name: str) -> dict | None:
         if not ROUTE_RE.fullmatch(name):
@@ -89,6 +191,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             cookie.load(self.headers.get("Cookie", ""))
             token = cookie[f"evs_{route}"].value
             verify_session(self.server.key, token, route=route)
+            connection = self.headers.get('X-EpicVM-Connection', '')
+            if not self.server.connection_allowed(connection) or not self.server.validate(route, token) or not self.server.remember(route, token, connection):
+                raise ValueError('Revoked stream session')
         except (KeyError, ValueError):
             self._reply(HTTPStatus.UNAUTHORIZED)
             return
@@ -108,6 +213,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not self.server.route(grant["route"]) or not self.server.redeem_once(grant):
                 raise ValueError("Unavailable or used stream grant")
             session = issue_session(self.server.key, grant)
+            connection = self.headers.get('Host', '')
+            if not self.server.connection_allowed(connection) or not self.server.validate(grant['route'], session) or not self.server.remember(grant['route'], session, connection):
+                raise ValueError('Revoked stream grant')
         except (KeyError, UnicodeError, ValueError):
             self._reply(HTTPStatus.FORBIDDEN, b"Stream launch expired. Return to EpicVM and launch again.")
             return
@@ -122,6 +230,18 @@ if __name__ == "__main__":
     parser.add_argument("--routes", required=True, type=Path)
     parser.add_argument("--nonces", required=True, type=Path)
     parser.add_argument("--port", default=8090, type=int)
+    parser.add_argument('--authority', default='https://techexplore.us/EpicVM/api/stream/validate')
     args = parser.parse_args()
+    def disconnect(route):
+        import psutil
+        target = (args.routes.parent / route).resolve()
+        for process in psutil.process_iter(['name']):
+            try:
+                if (process.info['name'].lower() == 'web-server.exe'
+                        and Path(process.cwd()).resolve() == target):
+                    process.terminate()
+                    process.wait(timeout=3)
+            except psutil.NoSuchProcess:
+                continue
     Gateway(("127.0.0.1", args.port), key_path=args.key, routes_path=args.routes,
-            nonces_path=args.nonces).serve_forever()
+            nonces_path=args.nonces, authority=args.authority, disconnect=disconnect).serve_forever()

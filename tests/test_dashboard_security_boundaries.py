@@ -30,6 +30,26 @@ def authenticated_client(module):
     return module.app.test_client()
 
 
+def test_admin_password_hash_cannot_be_used_as_password(monkeypatch, tmp_path):
+    from werkzeug.security import generate_password_hash
+    module = load_app(monkeypatch, tmp_path)
+    stored = generate_password_hash('correct-password')
+    assert module._admin_password_matches('correct-password', stored)
+    assert not module._admin_password_matches(stored, stored)
+    assert not module._admin_password_matches('wrong-password', stored)
+    assert not module._admin_password_matches('scrypt:invalid$salt$hash', 'scrypt:invalid$salt$hash')
+    assert module._admin_password_matches('legacy-password', 'legacy-password')
+
+
+def test_identity_and_csrf_api_responses_are_not_cacheable(monkeypatch, tmp_path):
+    module = load_app(monkeypatch, tmp_path)
+    client = module.app.test_client()
+    for path in ('/EpicVM/api/me', '/EpicVM/api/account/session', '/Dashboard/api/auth/status', '/portal/api/auth/status'):
+        response = client.get(path)
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert 'Cookie' in response.vary and 'Authorization' in response.vary
+
+
 def test_vm_command_execution_is_disabled_without_running_docker(monkeypatch, tmp_path):
     module = load_app(monkeypatch, tmp_path)
     monkeypatch.setattr(

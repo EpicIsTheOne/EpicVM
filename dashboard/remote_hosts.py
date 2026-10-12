@@ -71,7 +71,8 @@ def _validate_agent_url(value: Any) -> str:
     if not allowed:
         is_tailscale_ip = bool(address and ipaddress.ip_network("100.64.0.0/10").version == address.version and address in ipaddress.ip_network("100.64.0.0/10"))
         is_tailnet_name = hostname.endswith(".ts.net")
-        if not (is_tailscale_ip or is_tailnet_name):
+        is_local = bool(address and address.is_loopback and _is_truthy(os.environ.get('EPICVM_ALLOW_LOOPBACK_HOST')))
+        if not (is_tailscale_ip or is_tailnet_name or is_local):
             raise RemoteHostConfigError("agent_url must target a Tailscale address")
     return url
 
@@ -307,7 +308,7 @@ class ConfiguredVmHostRegistry(VmHostRegistry):
         signature = self._signature()
         if not force and signature == self._loaded_signature:
             return
-        providers: dict[str, Any] = {"local": self.local_provider}
+        providers: dict[str, Any] = {} if os.environ.get("EPICVM_HOSTING_PROFILE") == "multiseat" else {"local": self.local_provider}
         try:
             records = load_remote_host_configs(self.path)
             self.config_error = ""
@@ -353,7 +354,7 @@ class ConfiguredVmHostRegistry(VmHostRegistry):
             "resources": {},
             "last_error": "",
         }
-        records = [local]
+        records = [] if os.environ.get("EPICVM_HOSTING_PROFILE") == "multiseat" else [local]
         for host_id, provider in self._providers.items():
             if host_id == "local":
                 continue

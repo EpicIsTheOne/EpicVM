@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable><AssemblyName>EpicVM.Agent</AssemblyName><StartupObject>EpicVM.Desktop.InteractionTestRunner</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Agent/Setup.cs" Link="Setup.cs"/>
+    <Compile Include="../Agent/Program.cs" Link="Program.cs"/>
+    <Compile Include="../Agent/Layout.cs" Link="Layout.cs"/>
+    <Compile Include="../Agent/Interactions.cs" Link="Interactions.cs"/>
+    <Compile Include="../Agent/Convenience.cs" Link="Convenience.cs"/>
+    <Compile Include="../Agent/Recovery.cs" Link="Recovery.cs"/>
+    <Compile Include="../Agent/Updates.cs" Link="Updates.cs"/>
+    <Page Include="../Agent/Theme.xaml" Link="Theme.xaml"/>
+  </ItemGroup>
+</Project>

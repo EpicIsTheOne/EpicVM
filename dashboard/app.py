@@ -214,14 +214,13 @@ def _valid_dashboard_admin(username: str, pw: str) -> bool:
 def _admin_password_matches(candidate: str, expected: str) -> bool:
     if not expected:
         return False
-    # Werkzeug hash formats look like "scrypt:32768:8:1$salt$hash" (the method
-    # prefix may include parameters before the first '$'). Try hash verification
-    # first and fall back to a constant-time plaintext compare if it isn't a hash.
-    try:
-        if check_password_hash(expected, candidate):
-            return True
-    except (TypeError, ValueError):
-        pass
+    # A stored hash is never itself a valid password. Only legacy plaintext
+    # credentials may use the compatibility comparison.
+    if expected.startswith(('scrypt:', 'pbkdf2:')) or expected.count('$') >= 2:
+        try:
+            return check_password_hash(expected, candidate)
+        except (TypeError, ValueError):
+            return False
     return hmac.compare_digest(candidate, expected)
 
 def need_auth():
@@ -1009,7 +1008,13 @@ def _console_orchestrator():
             auth_middleware=_env_text('EPICVM_TRAEFIK_AUTH_MIDDLEWARE', ''),
             router_priority=_env_text('EPICVM_TRAEFIK_ROUTER_PRIORITY', ''),
         )
-        if backend in ('moonlight', 'sunshine'):
+        if backend == 'native-moonlight':
+            try:
+                from .native_moonlight_orchestrator import NativeMoonlightOrchestrator
+            except ImportError:
+                from native_moonlight_orchestrator import NativeMoonlightOrchestrator
+            _CONSOLE_ORCHESTRATOR = NativeMoonlightOrchestrator(root=_env_text('EPICVM_MOONLIGHT_ROOT', ''),viewer_package=_env_text('EPICVM_VIEWER_PACKAGE',''),**common)
+        elif backend in ('moonlight', 'sunshine'):
             _CONSOLE_ORCHESTRATOR = MoonlightOrchestrator(
                 root=_env_text('EPICVM_MOONLIGHT_ROOT', '/opt/epicvm/moonlight-instances'),
                 **common,
@@ -4748,6 +4753,17 @@ def epicvm_public_me_api():
     return jsonify({'ok': True, **payload})
 
 
+@app.after_request
+def protect_api_response_cache(response):
+    # API responses can contain account identity, CSRF tokens or credentials.
+    # Explicitly prevent browser/shared-cache reuse across cookie sessions.
+    if request.path.lower().startswith(('/epicvm/api/', '/portal/api/', '/dashboard/api/', '/epicvm/dashboard/api/')):
+        response.headers['Cache-Control'] = 'no-store'
+        response.vary.add('Cookie')
+        response.vary.add('Authorization')
+    return response
+
+
 @app.get('/portal/api/vms')
 @portal_auth_required
 def portal_vms_api():
@@ -5236,7 +5252,7 @@ def portal_login_page():
 def epicvm_portal_home():
     # Render the stylized SPA portal; the SPA gates anon/pending/rejected users.
     base = os.path.join(_state_dir(), 'epicvm_web')
-    dist = os.path.join(base, 'dist')
+    dist = os.environ.get('EPICVM_WEB_DIST', os.path.join(base, 'dist'))
     indexcand = os.path.join(dist, 'index.html')
     if os.path.isfile(indexcand):
         return send_from_directory(dist, 'index.html')
@@ -5654,7 +5670,7 @@ def dashboard_v2_logout_public():
 def serve_epicvm_public(path=''):
     """Serve the public EpicVM beta front door (separate Vite build, base /EpicVM/)."""
     base = os.path.join(_state_dir(), 'epicvm_web')
-    dist = os.path.join(base, 'dist')
+    dist = os.environ.get('EPICVM_WEB_DIST', os.path.join(base, 'dist'))
     if path:
         cand = os.path.join(dist, path)
         if os.path.isfile(cand):
@@ -9086,6 +9102,11 @@ try:
 except ImportError:
     from direct_stream import register_direct_stream
 register_direct_stream(app, globals())
+try:
+    from .host_runtime_api import register_host_runtime
+except ImportError:
+    from host_runtime_api import register_host_runtime
+register_host_runtime(app, globals())
 
 
 if __name__ == '__main__':

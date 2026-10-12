@@ -24,6 +24,24 @@ def test_admin_desktop_fallback_exposes_local_connection(workspace, monkeypatch,
     assert client.get('/EpicVM/api/account/host-gaming').json['localConnectionAvailable'] is False
 
 
+def test_offline_host_has_explicit_status_and_does_not_queue_launch(workspace, monkeypatch):
+    from remote_agent_client import RemoteAgentError
+    def agent(method, path, payload=None, **kwargs):
+        assert method == 'GET'
+        assert kwargs['timeout'] == 5
+        raise RemoteAgentError('private transport details')
+    monkeypatch.setattr(workspace, '_vm_host', lambda _: SimpleNamespace(client=SimpleNamespace(_request=agent)))
+    client = login(workspace, 'rootadmin', dashboard=True)
+    catalog = client.get('/EpicVM/api/account/host-gaming')
+    assert catalog.status_code == 200
+    assert catalog.json['hostOnline'] is False
+    assert catalog.json['available'] is False
+    launch = post(client, 'account/host-gaming/desktop', hostId='epic-pc', **{'async': True})
+    assert launch.status_code == 503
+    assert launch.json['error']['code'] == 'host_offline'
+    assert 'private transport details' not in launch.get_data(as_text=True)
+
+
 def test_desktop_only_polling_does_not_scan_vm_providers(workspace, monkeypatch):
     client = login(workspace)
     monkeypatch.setattr(workspace, '_resource_inventory', lambda **kw: (_ for _ in ()).throw(AssertionError('VM scan')))
@@ -82,6 +100,8 @@ def test_async_launch_deduplicates_and_binds_status_to_owner(workspace, monkeypa
         url = '/EpicVM/api/account/host-gaming/launch-jobs/' + job
         assert bob.get(url).status_code == 404
         assert alice.get(url).json['state'] == 'running'
+        assert alice.get(url).json['stage'] == 'windows'
+        assert alice.get(url).json['createdAt'] > 0
         assert post(alice, 'account/host-gaming/stop').status_code == 409
     finally:
         release.set()
@@ -91,6 +111,7 @@ def test_async_launch_deduplicates_and_binds_status_to_owner(workspace, monkeypa
         if result['state'] != 'running': break
         time.sleep(.05)
     assert result['state'] == 'ready', result
+    assert result['stage'] == 'checking'
     assert result['result']['launchUrl'].startswith('/EpicVM/stream-launch/')
     assert calls == ['portal:alice']
 
@@ -197,7 +218,7 @@ def test_host_game_grant_controls_native_launch(workspace, monkeypatch, tmp_path
     alice = login(workspace)
     initial = alice.get('/EpicVM/api/account/host-gaming').json
     assert initial['games'] == []
-    assert initial['seat'] == {'id': 'alice-seat', 'status': 'Ready', 'portBase': 48100, 'errorMessage': None}
+    assert initial['seat'] == {'id': 'alice-seat', 'accountName': 'evseat_' + hashlib.sha256(b'portal:alice').hexdigest()[:13], 'status': 'Ready', 'portBase': 48100, 'errorMessage': None}
     assert 'bob-seat' not in str(initial)
     assert post(alice, 'account/host-gaming/launch', gameId='harmless').status_code == 400
     admin = login(workspace, 'rootadmin', dashboard=True)
@@ -336,9 +357,32 @@ def test_personal_desktop_list_and_entry_are_scoped_to_each_user_and_host(worksp
     assert alice_by_host['win-a']['seat']['id'] == 'win-a-alice'
     assert alice_by_host['win-b']['seat']['id'] == 'win-b-alice'
     assert bob_desktops[0]['seat']['id'] == 'win-b-bob'
+    assert alice_by_host['win-a']['seat']['accountName'] == 'EpicVM_alice'
+    assert bob_desktops[0]['seat']['accountName'] == 'EpicVM_bob'
+    assert 'EpicVM_bob' not in str(alice_desktops)
+    assert 'EpicVM_alice' not in str(bob_desktops)
     assert 'win-b-bob' not in str(alice_desktops)
     assert 'win-a-alice' not in str(bob_desktops)
     assert ('win-a', 'POST', '/v1/host-gaming/desktop', {'owner': 'portal:alice'}) in calls
     assert ('win-b', 'POST', '/v1/host-gaming/desktop', {'owner': 'portal:alice'}) in calls
     assert not any(host_id == 'win-a' and path == '/v1/host-gaming/desktop' and payload == {'owner': 'portal:bob'}
                    for host_id, _, path, payload in calls)
+
+
+def test_hosting_status_is_owner_safe_and_preserves_existing_seat(workspace, monkeypatch):
+    catalog = {'ok': True, 'ready': True, 'hosting': {'paused': True, 'full': True, 'seatCount': 1, 'maxSeats': 1},
+               'games': [], 'seats': [{'id': 'alice-seat', 'accountName': 'EpicVM_alice', 'status': 'Ready'}]}
+    monkeypatch.setattr(workspace, '_vm_host', lambda _: SimpleNamespace(client=SimpleNamespace(_request=lambda *a, **kw: catalog.copy())))
+    admin, alice, bob = login(workspace, 'manager'), login(workspace), login(workspace, 'bob')
+    workspace._host_desktop_grants_init()
+    with workspace._users_conn() as conn:
+        conn.executemany('INSERT INTO host_desktop_grants VALUES(?,?,?)', [('portal','alice','epic-pc'),('portal','bob','epic-pc')])
+    a = alice.get('/EpicVM/api/account/host-gaming/desktops').json['desktops'][0]
+    b = bob.get('/EpicVM/api/account/host-gaming/desktops').json['desktops'][0]
+    assert a['seat']['id'] == 'alice-seat' and b['seat'] is None
+    assert a['hosting'] == b['hosting'] == {'paused': True, 'full': True}
+    assert 'seatCount' not in str(b) and 'alice-seat' not in str(b)
+    assert bob.get('/EpicVM/api/account/host-gaming').json['hosting'] == b['hosting']
+    assert admin.get('/EpicVM/api/management/host-gaming').json['hosting']['maxSeats'] == 1
+    catalog['hosting'] = {'paused': False, 'full': False, 'seatCount': 0, 'maxSeats': 1}
+    assert bob.get('/EpicVM/api/account/host-gaming/desktops').json['desktops'][0]['hosting'] == {'paused': False, 'full': False}

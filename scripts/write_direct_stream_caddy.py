@@ -26,6 +26,7 @@ for route, record in sorted(routes.items()):
         "        request_header -X-EpicVM-User",
         "        forward_auth 127.0.0.1:8090 {",
         "            uri /authorize",
+        "            header_up X-EpicVM-Connection {http.request.host}",
         "            copy_headers X-EpicVM-User",
         "        }",
         f"        reverse_proxy 127.0.0.1:{port}",

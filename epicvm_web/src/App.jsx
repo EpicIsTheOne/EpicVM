@@ -26,7 +26,7 @@ export default function App() {
   const currentUser = useRef(user)
   currentUser.current = user
   const location = useLocation()
-  const clearCache = () => { try { window.sessionStorage.removeItem('epicvm.portal.machines.v1') } catch { /* optional cache */ } }
+  const clearCache = () => { try { window.sessionStorage.removeItem('epicvm.portal.machines.v1'); window.sessionStorage.removeItem('epicvm.portal.launch.v1') } catch { /* optional cache */ } }
 
   const checkUser = useCallback(async () => {
     const revision = ++authRevision.current
